@@ -3,10 +3,10 @@
 #include <cuda_runtime.h>
 #include <driver_functions.h>
 #include <math.h>
-
+#include <stdio.h>
 #define THREADS_PER_BLOCK 512
-#define SampleSize 100   // the sample number in a chirp, suggesting it should be the power of 2
-#define ChirpSize 128    // the chirp number in a frame, suggesting it should be the the power of 2
+#define SampleSize 100   // the sample number in a chirp, suggesting it should be the pow_tester of 2
+#define ChirpSize 128    // the chirp number in a frame, suggesting it should be the the pow_tester of 2
 #define FrameSize 90     // the frame number
 #define RxSize 4         // the rx size, which is usually 4
 #define PI 3.14159265359 // pi
@@ -175,13 +175,13 @@ __device__ int bitsReverse(int num, int bits)
     return rev;
 }
 
-__global__ void cudaBitsReverse_kernel(Complex_t *input, int size, int pow)
+__global__ void cudaBitsReverse_kernel(Complex_t *input, int size, int pow_test)
 {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
     if (idx < size)
     {
         // swap the position
-        int pairIdx = bitsReverse(idx, pow);
+        int pairIdx = bitsReverse(idx, pow_test);
         if (pairIdx > idx)
         {
             Complex_t temp = input[idx];
@@ -191,33 +191,53 @@ __global__ void cudaBitsReverse_kernel(Complex_t *input, int size, int pow)
     }
 }
 
-__global__ void cudaButterflyFFT_kernel(Complex_t *data, int size, int stage)
+/**
+ * @param: data: input complex_t sequence
+ * @param: size: total size of input complex_t sequence
+ * @param: stage: current stage of the FFT kernel, starting from 1
+ */
+__global__ void cudaButterflyFFT_kernel(Complex_t *data, int size, int stage, int pow_test)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // Calculate pairIdx of the current element in the input data
-    int pairIdx = idx << (stage + 1); // Equivalent to idx * pow(2, stage + 1)
-
     // Perform butterfly operation for each pair of elements at the current stage
-    if (pairIdx < size)
+    if (idx < size)
     {
-        // Load the two elements to be combined using butterfly operation
-        Complex_t a = data[pairIdx];
-        Complex_t b = data[pairIdx + (1 << stage)]; // Equivalent to pairIdx + pow(2, stage)
+        // calculate butterfly coefficient pow_tester
+        int Wn_k = (1 << (pow_test - stage)) * idx % size;
+        // butterfly coefficient = Wn ^ Wn_k
+        // Wn = e^(-2j*pi/Size)
+        // Wn ^ Wn_k = e ^ (-2j*pi*Wn_k/Size)
+        double theta = -2 * PI * Wn_k / size;
+        Complex_t twiddle = {cos(theta), sin(theta)};
+        // calculate the pair index and multiplication factor
+        int step = 1 << (stage - 1);
+        int group_size = 1 << stage;
+        int lower_bound = (idx / group_size) * group_size;
+        int upper_bound = lower_bound + group_size;
+        int pairIdx = idx + step;
+        Complex_t product, sum;
+        // product = p * a
+        product = cudaComplexMul(twiddle, data[pairIdx]);
+        // sum = q + (-1) * p * a
+        sum = cudaComplexAdd(data[idx], product);
+        // data[idx] = q - p*a
+        if (pairIdx >= upper_bound)
+        {
+            pairIdx = idx - step;
+            product = cudaComplexMul(twiddle, data[idx]);
+            sum = cudaComplexAdd(data[pairIdx], product);
+        }
+        // write into the index position
+        // __syncthreads();
+        data[idx] = sum;
 
-        // Calculate twiddle factor (complex exponential)
-        float angle = -2.0f * PI * idx / (1 << (stage + 1)); // Equivalent to -2*pi*idx / pow(2, stage + 1)
-        Complex_t twiddle;
-        twiddle.real = cosf(angle);
-        twiddle.imag = sinf(angle);
-
-        // Perform butterfly operation
-        Complex_t sum = cudaComplexAdd(a, b);
-        Complex_t diff = cudaComplexMul(cudaComplexSub(a, b), twiddle);
-
-        // Store the results back to global memory
-        data[pairIdx] = sum;
-        data[pairIdx + (1 << stage)] = diff;
+        //     printf("idx %d twiddle.real %.3f twiddle.imag %.3f\n"
+        //             "data.real %.3f data.imag %.3f \n"
+        //             "product.real %.3f product.imag %.3f \n"
+        //             "sum.real %.3f sum.imag %.3f\n\n", idx,
+        //             twiddle.real, twiddle.imag, data[idx].real, data[idx].imag, product.real, product.imag, sum.real, sum.imag);
+    } else {
+        return;
     }
 }
 
@@ -260,6 +280,43 @@ int GetBits(int n)
     return bits;
 }
 
+void fftTest()
+{
+    int testSize = 16;
+    Complex_t *testInputHost_test = (Complex_t *)malloc(sizeof(Complex_t) * testSize);
+    Complex_t *fftInputBuf_test_device;
+    cudaCheckError(cudaMalloc((void **)&fftInputBuf_test_device, sizeof(Complex_t) * testSize));
+    for (int i = 0; i < testSize; i++)
+    {
+        testInputHost_test[i].real = i + 1;
+        testInputHost_test[i].imag = 0;
+    }
+    int pow_test = 1, cnt_test = 0;
+    while (pow_test < testSize)
+    {
+        pow_test <<= 1;
+        cnt_test++;
+    }
+
+    cudaCheckError(cudaMemcpy(fftInputBuf_test_device, testInputHost_test, sizeof(Complex_t) * testSize, cudaMemcpyHostToDevice));
+    int blocksFFTKernel_test = (testSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    printf("Pow %d log2(test size) %d\n", cnt_test, (int)log2((double)testSize));
+    cudaBitsReverse_kernel<<<blocksFFTKernel_test, THREADS_PER_BLOCK>>>(fftInputBuf_test_device, testSize, log2(testSize));
+    cudaDeviceSynchronize();
+    printComplexCUDA(fftInputBuf_test_device, 0, testSize, testSize);
+
+    for (int stage = 0; stage < log2(testSize); stage++)
+    {
+        printf("stage %d\n", stage);
+        cudaButterflyFFT_kernel<<<blocksFFTKernel_test, THREADS_PER_BLOCK>>>(fftInputBuf_test_device, testSize, stage + 1, cnt_test);
+        cudaDeviceSynchronize();
+    }
+    printf("FFT kernel Test\n");
+    printComplexCUDA(fftInputBuf_test_device, 0, testSize, testSize);
+    cudaFree(fftInputBuf_test_device);
+    free(testInputHost_test);
+}
+
 // /**
 //  * CUDA Function that do the following things:
 //  * 1. Reshape the input
@@ -268,7 +325,7 @@ int GetBits(int n)
 //  * 4. Find the peak absolute amplitude in transfomed results
 //  * 5. Return the peak value to host CPU for verification
 //  */
-double cudaProcessing(short *hostIn, Complex_t *host_baseFrame, int size)
+double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size)
 {
     // accept the input data and reshape the data
     // define the kernel parameters
@@ -279,20 +336,20 @@ double cudaProcessing(short *hostIn, Complex_t *host_baseFrame, int size)
     // allocate cuda memory
     Complex_t *reshapedArray;
     Complex_t *buffer;
-    short *deviceIn;
+    short *input_device;
     printf("Allocating Memory buffer for reshaped Array with size of %lu byte\n", sizeof(Complex_t) * SampleSize * ChirpSize * RxSize);
 
-    cudaCheckError(cudaMalloc((void **)&deviceIn, size * sizeof(short)));
+    cudaCheckError(cudaMalloc((void **)&input_device, size * sizeof(short)));
     cudaCheckError(cudaMalloc((void **)&reshapedArray, sizeof(Complex_t) * SampleSize * ChirpSize * RxSize));
     cudaCheckError(cudaMalloc((void **)&buffer, sizeof(Complex_t) * SampleSize * ChirpSize * RxSize));
-    cudaCheckError(cudaMemcpy(deviceIn, hostIn, size * sizeof(short), cudaMemcpyHostToDevice));
+    cudaCheckError(cudaMemcpy(input_device, input_host, size * sizeof(short), cudaMemcpyHostToDevice));
 
     /**
      * Memory copy check passed
      */
 
     printf("\nLaunching short2complex kernel\n");
-    cudaShort2Complex_kernel<<<numBlocksShortKernel, THREADS_PER_BLOCK>>>(deviceIn, buffer, size);
+    cudaShort2Complex_kernel<<<numBlocksShortKernel, THREADS_PER_BLOCK>>>(input_device, buffer, size);
     cudaDeviceSynchronize();
     // printComplexCUDA(buffer,25000,25010,SampleSize * ChirpSize * RxSize);
 
@@ -312,57 +369,57 @@ double cudaProcessing(short *hostIn, Complex_t *host_baseFrame, int size)
     int extendedSize = nextPow2(SampleSize * ChirpSize);
     const int numBlocksExtendedKernel = (extendedSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     // only get the Rx0 data into extended buffer
-    Complex_t *rx0ExtendedBuffer;
+    Complex_t *rx0ExtendedBuffer_device;
     Complex_t *baseFrame;
 
-    cudaCheckError(cudaMalloc((void **)&rx0ExtendedBuffer, sizeof(Complex_t) * extendedSize));
-    cudaCheckError(cudaMemcpy(rx0ExtendedBuffer, reshapedArray, SampleSize * ChirpSize * sizeof(Complex_t), cudaMemcpyDeviceToDevice));
+    cudaCheckError(cudaMalloc((void **)&rx0ExtendedBuffer_device, sizeof(Complex_t) * extendedSize));
+    cudaCheckError(cudaMemcpy(rx0ExtendedBuffer_device, reshapedArray, SampleSize * ChirpSize * sizeof(Complex_t), cudaMemcpyDeviceToDevice));
 
     cudaCheckError(cudaMalloc((void **)&baseFrame, sizeof(Complex_t) * SampleSize * ChirpSize));
     cudaCheckError(cudaMemcpy(baseFrame, host_baseFrame, SampleSize * ChirpSize * sizeof(Complex_t), cudaMemcpyHostToDevice));
     // launch the data extension kernel
-    cudaDataExtension_kernel<<<numBlocksExtendedKernel, THREADS_PER_BLOCK>>>(baseFrame, rx0ExtendedBuffer, SampleSize * ChirpSize, extendedSize);
+    cudaDataExtension_kernel<<<numBlocksExtendedKernel, THREADS_PER_BLOCK>>>(baseFrame, rx0ExtendedBuffer_device, SampleSize * ChirpSize, extendedSize);
     cudaDeviceSynchronize();
-    // printComplexCUDA(rx0ExtendedBuffer,extendedSize - 20,extendedSize-10,extendedSize);
+    // printComplexCUDA(rx0ExtendedBuffer_device,extendedSize - 20,extendedSize-10,extendedSize);
 
     /**
      * Above dataExtension kernel is verified
      */
 
     // launch the non-recursive FFT kernel
-    int testSize = 16;
-    Complex_t *fftRes;
-    Complex_t *testInputHost = (Complex_t *)malloc(sizeof(Complex_t) * testSize);
-    Complex_t *fftInputBuf;
-    cudaCheckError(cudaMalloc((void **)&fftRes, sizeof(Complex_t) * testSize));
-    cudaCheckError(cudaMalloc((void **)&fftInputBuf, sizeof(Complex_t) * testSize));
-    for (int i = 0; i < testSize; i++)
+    int cnt = 1, pow = 0;
+    while (cnt < extendedSize)
     {
-        testInputHost[i].real = i + 1;
-        testInputHost[i].imag = 0;
+        cnt <<= 1;
+        pow++;
     }
-    cudaCheckError(cudaMemcpy(fftInputBuf, testInputHost, sizeof(Complex_t) * testSize, cudaMemcpyHostToDevice));
-    int blocksFFTKernel = (testSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
-    cudaBitsReverse_kernel<<<blocksFFTKernel, THREADS_PER_BLOCK>>>(fftInputBuf, testSize, log2(testSize));
+    Complex_t *fftInputBuf_device;
+    
+    cudaCheckError(cudaMalloc((void **)&fftInputBuf_device, sizeof(Complex_t) * extendedSize));
+    cudaCheckError(cudaMemcpy(fftInputBuf_device, rx0ExtendedBuffer_device, sizeof(Complex_t) * extendedSize, cudaMemcpyDeviceToDevice));
+    
+    int blocksFFTKernel = (extendedSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    cudaBitsReverse_kernel<<<blocksFFTKernel, THREADS_PER_BLOCK>>>(fftInputBuf_device, extendedSize, log2(extendedSize));
     cudaDeviceSynchronize();
-    for (int stage = 0; stage < log2(testSize); stage++)
-    {
-        cudaButterflyFFT_kernel<<<blocksFFTKernel, THREADS_PER_BLOCK>>>(fftInputBuf, testSize, stage);
-        cudaDeviceSynchronize();
-    }
-    printf("FFT kernel Test\n");
-    printComplexCUDA(fftInputBuf, 0, testSize, testSize);
-    // printf("Ref kernel\n");
-    // printComplexCUDA(fftResRef, 0, 10, extendedSize);
 
-    cudaFree(deviceIn);
-    cudaFree(buffer);
-    cudaFree(fftRes);
-    cudaFree(fftInputBuf);
-    cudaFree(reshapedArray);
-    cudaFree(rx0ExtendedBuffer);
-    cudaFree(baseFrame);
+
+    for (int stage = 0; stage < pow; stage++)
+    {
+        printf("stage %d\n", stage);
+        cudaButterflyFFT_kernel<<<blocksFFTKernel, THREADS_PER_BLOCK>>>(fftInputBuf_device, extendedSize, stage + 1, pow);
+    }
+    printf("FFT result \n");
+    // printComplexCUDA(fftInputBuf_device, extendedSize * 2 / 3, extendedSize * 2 / 3 + 10, extendedSize);
+
+
+
+    cudaCheckError(cudaFree(input_device));
+    cudaCheckError(cudaFree(buffer));
+    cudaCheckError(cudaFree(fftInputBuf_device));
+    cudaCheckError(cudaFree(reshapedArray));
+    cudaCheckError(cudaFree(rx0ExtendedBuffer_device));
+    cudaCheckError(cudaFree(baseFrame));
 
     return 0.0;
 }
