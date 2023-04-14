@@ -10,6 +10,10 @@
 #define FrameSize 90     // the frame number
 #define RxSize 4         // the rx size, which is usually 4
 #define PI 3.14159265359 // pi
+#define fs 2.0e6         // sampling frequency
+#define lightSpeed 3.0e08
+#define mu 5.987e12 // FM slope
+
 
 #define DEBUG
 #ifdef DEBUG
@@ -77,9 +81,9 @@ __device__ static Complex_t makeComplex(double img, double real)
     return temp;
 }
 
-__device__ static double cudaComplexMol(Complex_t *a)
+__device__ static double cudaComplexMol(Complex_t a)
 {
-    return sqrt(a->real * a->real + a->imag * a->imag);
+    return sqrt(a.real * a.real + a.imag * a.imag);
 }
 
 /**
@@ -236,8 +240,77 @@ __global__ void cudaButterflyFFT_kernel(Complex_t *data, int size, int stage, in
         //             "product.real %.3f product.imag %.3f \n"
         //             "sum.real %.3f sum.imag %.3f\n\n", idx,
         //             twiddle.real, twiddle.imag, data[idx].real, data[idx].imag, product.real, product.imag, sum.real, sum.imag);
-    } else {
+    }
+    else
+    {
         return;
+    }
+}
+/**
+ * kernel function to find the maxium value in the input FFT result and corresponding index
+ * @param: data: input complex data
+ * @param: size: input size
+ * @param: maxValBuf: buffer to store the parallel selected local maxium values in each block, size = THREADS_PER_BLOCK
+ * @param: maxIdxBuf: buffer to store the parallel selected maxium value corresponding index, size = THREADS_PER_BLOCK
+ * @param: finalMaxValue: final sorted global maxium value
+ * @param: finalMaxIdx: final sroted global maxium value corresponding index
+ */
+__global__ void cudaFindMax_kernel(Complex_t *data, int size, double *maxValBuf, int *maxIdxBuf, double *finalMaxValue, int *finalMaxIdx)
+{
+    int globalIdx = blockDim.x * blockIdx.x + threadIdx.x;
+    if (globalIdx < size)
+    {
+        // load the corresponding data into local block-shared memory
+        double tmp = 0.0f;
+        int maxIdx = 0;
+        extern __shared__ Complex_t maxCache[THREADS_PER_BLOCK];
+        extern __shared__ int idxCache[THREADS_PER_BLOCK];
+        int localIdx = threadIdx.x;
+
+        maxCache[localIdx] = data[globalIdx];
+        idxCache[localIdx] = globalIdx;
+
+        __syncthreads();
+        if (localIdx == 0)
+        {
+            for (int i = 0; i < THREADS_PER_BLOCK; i++)
+            {
+                double absVal = cudaComplexMol(maxCache[i]);
+                if (absVal > tmp)
+                {
+                    tmp = absVal;
+                    maxIdx = idxCache[i];
+                }
+            }
+            // write the compared value into global memory
+            maxValBuf[blockIdx.x] = tmp;
+            maxIdxBuf[blockIdx.x] = maxIdx;
+        }
+        __syncthreads();
+        // once the maxVal array is filled. Find the max value in the maxVal array
+        if (globalIdx < THREADS_PER_BLOCK)
+        {
+            extern __shared__ double finalMaxCache[THREADS_PER_BLOCK];
+            extern __shared__ int finalIdxCache[THREADS_PER_BLOCK];
+            finalMaxCache[globalIdx] = maxValBuf[globalIdx];
+            finalIdxCache[globalIdx] = maxIdxBuf[globalIdx];
+            __syncthreads();
+            if (globalIdx == 0)
+            {
+                double finalMax = 0.0;
+                int finalIdx;
+                for (int i = 0; i < THREADS_PER_BLOCK; i++)
+                {
+                    if (finalMaxCache[i] > finalMax)
+                    {
+                        finalMax = finalMaxCache[i];
+                        finalIdx = finalIdxCache[i];
+                    }
+                }
+                *finalMaxValue = finalMax;
+                *finalMaxIdx = finalIdx;
+            }
+        }
     }
 }
 
@@ -316,6 +389,23 @@ void fftTest()
     cudaFree(fftInputBuf_test_device);
     free(testInputHost_test);
 }
+int cudaFindAbsMax(Complex_t *ptr, int size)
+{
+    int maxidx = 0;
+    double maxval = 0;
+    double absval;
+    for (int i = 0; i < size; i++)
+    {
+        Complex_t tmp = ptr[i];
+        absval = sqrt(tmp.real * tmp.real + tmp.imag * tmp.imag);
+        if (absval > maxval)
+        {
+            maxval = absval;
+            maxidx = i;
+        }
+    }
+    return maxidx;
+}
 
 // /**
 //  * CUDA Function that do the following things:
@@ -393,26 +483,58 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size)
         cnt <<= 1;
         pow++;
     }
-
+    printf("\nLaunching FFT kernel \n");
     Complex_t *fftInputBuf_device;
-    
     cudaCheckError(cudaMalloc((void **)&fftInputBuf_device, sizeof(Complex_t) * extendedSize));
     cudaCheckError(cudaMemcpy(fftInputBuf_device, rx0ExtendedBuffer_device, sizeof(Complex_t) * extendedSize, cudaMemcpyDeviceToDevice));
-    
+
     int blocksFFTKernel = (extendedSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     cudaBitsReverse_kernel<<<blocksFFTKernel, THREADS_PER_BLOCK>>>(fftInputBuf_device, extendedSize, log2(extendedSize));
     cudaDeviceSynchronize();
 
-
     for (int stage = 0; stage < pow; stage++)
     {
-        printf("stage %d\n", stage);
+        // printf("stage %d\n", stage);
         cudaButterflyFFT_kernel<<<blocksFFTKernel, THREADS_PER_BLOCK>>>(fftInputBuf_device, extendedSize, stage + 1, pow);
     }
-    printf("FFT result \n");
+    // printf("FFT result \n");
     // printComplexCUDA(fftInputBuf_device, extendedSize * 2 / 3, extendedSize * 2 / 3 + 10, extendedSize);
 
+    /**
+     * Above FFT kernel function is verified
+     */
+    printf("\nLaunching findMax kernel\n");
+    Complex_t *fftRes_host = (Complex_t *)malloc(sizeof(Complex_t) * extendedSize);
+    cudaCheckError(cudaMemcpy(fftRes_host, fftInputBuf_device, sizeof(Complex_t) * extendedSize, cudaMemcpyDeviceToHost));
+    double Fs_extend = fs * extendedSize / (ChirpSize * SampleSize);
+    int maxDisIdx = cudaFindAbsMax(fftRes_host, floor(0.4 * extendedSize)) * (ChirpSize * SampleSize) / extendedSize;
+    double maxDis = lightSpeed * (((double)maxDisIdx / extendedSize) * Fs_extend) / (2 * mu);
+    // printf("Finding maxDisIdx %d maxDis %.5f\n", maxDisIdx, maxDis);
 
+    free(fftRes_host);
+    // double *maxValBuf_device;
+    // int *maxIdxBuf_device;
+    // double *finalMaxValue_device;
+    // int *finalMaxIdx_device;
+    // cudaCheckError(cudaMalloc((void **)&maxValBuf_device, sizeof(double) * THREADS_PER_BLOCK));
+    // cudaCheckError(cudaMalloc((void **)&finalMaxValue_device, sizeof(double)));
+    // cudaCheckError(cudaMalloc((void **)&maxIdxBuf_device, sizeof(int) * THREADS_PER_BLOCK));
+    // cudaCheckError(cudaMalloc((void **)&finalMaxIdx_device, sizeof(int)));
+
+    // cudaFindMax_kernel<<<blocksFFTKernel, THREADS_PER_BLOCK>>>(fftInputBuf_device, extendedSize, maxValBuf_device, maxIdxBuf_device, finalMaxValue_device, finalMaxIdx_device);
+
+    // double *maxValue_host = (double *)malloc(sizeof(double));
+    // int *maxIdx_host = (int *)malloc(sizeof(int));
+
+    // cudaCheckError(cudaMemcpy(maxValue_host, finalMaxValue_device, sizeof(double), cudaMemcpyDeviceToHost));
+    // cudaCheckError(cudaMemcpy(maxIdx_host, finalMaxIdx_device, sizeof(int), cudaMemcpyDeviceToHost));
+    // int maxDisIdx = *maxIdx_host *
+    // printf("finding max value %.5f idx %d\n", *maxValue_host, *maxIdx_host);
+
+    // cudaCheckError(cudaFree(maxValBuf_device));
+    // cudaCheckError(cudaFree(maxIdxBuf_device));
+    // cudaCheckError(cudaFree(finalMaxValue_device));
+    // cudaCheckError(cudaFree(finalMaxIdx_device));
 
     cudaCheckError(cudaFree(input_device));
     cudaCheckError(cudaFree(buffer));
@@ -421,5 +543,5 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size)
     cudaCheckError(cudaFree(rx0ExtendedBuffer_device));
     cudaCheckError(cudaFree(baseFrame));
 
-    return 0.0;
+    return maxDis;
 }

@@ -82,7 +82,7 @@ void butterfly_fft(int size, Complex_t input[])
             input[i] = input[j];
             input[j] = temp;
         }
-    }   
+    }
 
     // Cooley-Tukey radix-2 DIT FFT
     for (int step = 2; step <= size; step <<= 1)
@@ -94,14 +94,12 @@ void butterfly_fft(int size, Complex_t input[])
             Complex_t omega = {1.0, 0.0};
             for (int j = 0; j < step / 2; j++)
             {
-                Complex_t wn = Complex_t_MUL(omega, input[k+j+step/2]);
-                input[k + j + step/2] = Complex_t_SUB(input[k + j], wn);
+                Complex_t wn = Complex_t_MUL(omega, input[k + j + step / 2]);
+                input[k + j + step / 2] = Complex_t_SUB(input[k + j], wn);
                 input[k + j] = Complex_t_ADD(input[k + j], wn);
-                omega = Complex_t_MUL(omega,twiddle);
-
+                omega = Complex_t_MUL(omega, twiddle);
             }
         }
-        
     }
 }
 
@@ -264,7 +262,7 @@ int main()
     Complex_t *fftRes = (Complex_t *)malloc(nextPow2(ChirpSize * SampleSize) * sizeof(Complex_t));
     Complex_t *fftInput = (Complex_t *)malloc(extendSize * sizeof(Complex_t));
 
-    if ((size = (int)fread(inputData, sizeof(short), NumDataPerFrame, fp)) > 0)
+    while ((size = (int)fread(inputData, sizeof(short), NumDataPerFrame, fp)) > 0)
     {
 
         printf("Reading next frame from file\n");
@@ -293,14 +291,14 @@ int main()
         memmove(fftRes, fftInput, extendSize * sizeof(Complex_t));
 
         butterfly_fft(extendSize, fftRes);
-        for(int i = extendSize * 2 / 3; i < extendSize * 2 / 3 + 10; i++){
-            printf("CPU fftRes[%d] real %.5f imag %.5f \n", i,fftRes[i].real, fftRes[i].imag);
-        }
+        // for(int i = extendSize * 2 / 3; i < extendSize * 2 / 3 + 10; i++){
+        //     printf("CPU fftRes[%d] real %.5f imag %.5f \n", i,fftRes[i].real, fftRes[i].imag);
+        // }
 
         double Fs_extend = Fs * extendSize / (ChirpSize * SampleSize);
         int maxDisIdx = FindAbsMax(fftRes, floor(0.4 * extendSize)) * (ChirpSize * SampleSize) / extendSize;
         double maxDis = c * (((double)maxDisIdx / extendSize) * Fs_extend) / (2 * mu);
-
+        // printf("Finding maxDisIdx %d maxDis %.5f\n", maxDisIdx, maxDis);
         cudaRes[numFrameRead] = cudaDist;
         cpuRes[numFrameRead] = maxDis;
     }
@@ -317,13 +315,13 @@ int main()
 
     for (int i = 1; i < numFrameRead; i++)
     {
-        // if (abs(cudaRes[i] - cpuRes[i]) >= 1e-5)
-        // {
-        //     printf("CUDA result verification failed at frame %d\n", i);
-        //     printf("Ref Res %.6f CUDA res %.6f\n", cpuRes[i], cudaRes[i]);
-        //     break;
-        // }
-        printf("Ref Res %.6f CUDA res %.6f\n", cpuRes[i], cudaRes[i]);
+        if (abs(cudaRes[i] - cpuRes[i]) >= 1e-5)
+        {
+            printf("CUDA result verification failed at frame %d\n", i);
+            printf("Ref Res %.6f CUDA res %.6f\n", cpuRes[i], cudaRes[i]);
+            break;
+        }
+        // printf("frame[%d] Ref Res %.6f CUDA res %.6f\n", i, cpuRes[i], cudaRes[i]);
     }
 
     return 0;
