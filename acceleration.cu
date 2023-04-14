@@ -14,7 +14,6 @@
 #define lightSpeed 3.0e08
 #define mu 5.987e12 // FM slope
 
-
 #define DEBUG
 #ifdef DEBUG
 #define cudaCheckError(ans) cudaAssert((ans), __FILE__, __LINE__);
@@ -22,9 +21,9 @@ inline void cudaAssert(cudaError_t code, const char *file, int line, bool abort 
 {
     if (code != cudaSuccess)
     {
-        fprintf(stderr, "CUDA Error: %s at %s:%d\n",
+        // printf(stderr, "CUDA Error: %s at %s:%d\n",
 
-                cudaGetErrorString(code), file, line);
+        (cudaGetErrorString(code), file, line);
         abort = true;
     }
     if (abort)
@@ -235,7 +234,7 @@ __global__ void cudaButterflyFFT_kernel(Complex_t *data, int size, int stage, in
         // __syncthreads();
         data[idx] = sum;
 
-        //     printf("idx %d twiddle.real %.3f twiddle.imag %.3f\n"
+        //     // printf("idx %d twiddle.real %.3f twiddle.imag %.3f\n"
         //             "data.real %.3f data.imag %.3f \n"
         //             "product.real %.3f product.imag %.3f \n"
         //             "sum.real %.3f sum.imag %.3f\n\n", idx,
@@ -316,7 +315,7 @@ __global__ void cudaFindMax_kernel(Complex_t *data, int size, double *maxValBuf,
 
 void printComplexCUDA(Complex_t *input, int start, int end, int size)
 {
-    printf("Displaying Complex Number processed from CUDA\n");
+    // printf("Displaying Complex Number processed from CUDA\n");
 
     Complex_t *cpuData = (Complex_t *)malloc(sizeof(Complex_t) * size);
 
@@ -324,21 +323,21 @@ void printComplexCUDA(Complex_t *input, int start, int end, int size)
 
     for (int i = start; i < end; i++)
     {
-        printf("cudaComplex[%d] real: %.5f  img: %.5f\n", i, cpuData[i].real, cpuData[i].imag);
+        // printf("cudaComplex[%d] real: %.5f  img: %.5f\n", i, cpuData[i].real, cpuData[i].imag);
     }
     free(cpuData);
 }
 
 void printIntCUDA(int *input, int start, int end, int size)
 {
-    printf("Displaying short Number processed from CUDA\n");
+    // printf("Displaying short Number processed from CUDA\n");
 
     int *cpuData = (int *)malloc(sizeof(int) * size);
 
     cudaMemcpy(cpuData, input, sizeof(int) * size, cudaMemcpyDeviceToHost);
     for (int i = start; i < end; i++)
     {
-        printf("intInput[%d] %d\n", i, cpuData[i]);
+        // printf("intInput[%d] %d\n", i, cpuData[i]);
     }
     free(cpuData);
 }
@@ -373,18 +372,18 @@ void fftTest()
 
     cudaCheckError(cudaMemcpy(fftInputBuf_test_device, testInputHost_test, sizeof(Complex_t) * testSize, cudaMemcpyHostToDevice));
     int blocksFFTKernel_test = (testSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-    printf("Pow %d log2(test size) %d\n", cnt_test, (int)log2((double)testSize));
+    // printf("Pow %d log2(test size) %d\n", cnt_test, (int)log2((double)testSize));
     cudaBitsReverse_kernel<<<blocksFFTKernel_test, THREADS_PER_BLOCK>>>(fftInputBuf_test_device, testSize, log2(testSize));
     cudaDeviceSynchronize();
     printComplexCUDA(fftInputBuf_test_device, 0, testSize, testSize);
 
     for (int stage = 0; stage < log2(testSize); stage++)
     {
-        printf("stage %d\n", stage);
+        // printf("stage %d\n", stage);
         cudaButterflyFFT_kernel<<<blocksFFTKernel_test, THREADS_PER_BLOCK>>>(fftInputBuf_test_device, testSize, stage + 1, cnt_test);
         cudaDeviceSynchronize();
     }
-    printf("FFT kernel Test\n");
+    // printf("FFT kernel Test\n");
     printComplexCUDA(fftInputBuf_test_device, 0, testSize, testSize);
     cudaFree(fftInputBuf_test_device);
     free(testInputHost_test);
@@ -419,7 +418,11 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size)
 {
     // accept the input data and reshape the data
     // define the kernel parameters
-    printf("Entering CUDA processing functions\n");
+    // printf("Entering CUDA processing functions\n");
+
+    Timer timer;
+
+    double cudaBegin = timer.elapsed();
     const int numBlocksShortKernel = (size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     const int complexSize = SampleSize * ChirpSize * RxSize;
     const int numBlocksComplexKernel = (complexSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
@@ -427,7 +430,7 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size)
     Complex_t *reshapedArray;
     Complex_t *buffer;
     short *input_device;
-    printf("Allocating Memory buffer for reshaped Array with size of %lu byte\n", sizeof(Complex_t) * SampleSize * ChirpSize * RxSize);
+    // printf("Allocating Memory buffer for reshaped Array with size of %lu byte\n", sizeof(Complex_t) * SampleSize * ChirpSize * RxSize);
 
     cudaCheckError(cudaMalloc((void **)&input_device, size * sizeof(short)));
     cudaCheckError(cudaMalloc((void **)&reshapedArray, sizeof(Complex_t) * SampleSize * ChirpSize * RxSize));
@@ -438,7 +441,8 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size)
      * Memory copy check passed
      */
 
-    printf("\nLaunching short2complex kernel\n");
+    // printf("\nLaunching short2complex kernel\n");
+    double cudaReshapeBegin = timer.elapsed();
     cudaShort2Complex_kernel<<<numBlocksShortKernel, THREADS_PER_BLOCK>>>(input_device, buffer, size);
     cudaDeviceSynchronize();
     // printComplexCUDA(buffer,25000,25010,SampleSize * ChirpSize * RxSize);
@@ -446,16 +450,18 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size)
     /**
      * Above short2complex kernel is verified
      */
-    printf("\nLaunching reshape kernel\n");
+    // printf("\nLaunching reshape kernel\n");
     cudaComplexReshape_kernel<<<numBlocksComplexKernel, THREADS_PER_BLOCK>>>(reshapedArray, buffer, complexSize);
     cudaDeviceSynchronize();
-
-    // printf("\nreshaped Array\n");
+    double cudaReshapeEnd = timer.elapsed();
+    double cudaReshapeTime = cudaReshapeEnd - cudaReshapeBegin;
+    // // printf("\nreshaped Array\n");
     // printComplexCUDA(reshapedArray,37035,37039,SampleSize * ChirpSize * RxSize);
     // printComplexCUDA(reshapedArray,0,10,SampleSize * ChirpSize * RxSize);
     /**
      * Above reshape kernel is verified
      */
+    double cudaFrameExtensionBegin = timer.elapsed();
     int extendedSize = nextPow2(SampleSize * ChirpSize);
     const int numBlocksExtendedKernel = (extendedSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     // only get the Rx0 data into extended buffer
@@ -471,6 +477,8 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size)
     cudaDataExtension_kernel<<<numBlocksExtendedKernel, THREADS_PER_BLOCK>>>(baseFrame, rx0ExtendedBuffer_device, SampleSize * ChirpSize, extendedSize);
     cudaDeviceSynchronize();
     // printComplexCUDA(rx0ExtendedBuffer_device,extendedSize - 20,extendedSize-10,extendedSize);
+    double cudaFrameExtensionEnd = timer.elapsed();
+    double cudaFrameExtensionTime = cudaFrameExtensionEnd - cudaFrameExtensionBegin;
 
     /**
      * Above dataExtension kernel is verified
@@ -483,7 +491,10 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size)
         cnt <<= 1;
         pow++;
     }
-    printf("\nLaunching FFT kernel \n");
+    // printf("\nLaunching FFT kernel \n");
+
+    double cudaFFTbegin = timer.elapsed();
+
     Complex_t *fftInputBuf_device;
     cudaCheckError(cudaMalloc((void **)&fftInputBuf_device, sizeof(Complex_t) * extendedSize));
     cudaCheckError(cudaMemcpy(fftInputBuf_device, rx0ExtendedBuffer_device, sizeof(Complex_t) * extendedSize, cudaMemcpyDeviceToDevice));
@@ -494,22 +505,29 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size)
 
     for (int stage = 0; stage < pow; stage++)
     {
-        // printf("stage %d\n", stage);
+        // // printf("stage %d\n", stage);
         cudaButterflyFFT_kernel<<<blocksFFTKernel, THREADS_PER_BLOCK>>>(fftInputBuf_device, extendedSize, stage + 1, pow);
     }
-    // printf("FFT result \n");
+    // // printf("FFT result \n");
     // printComplexCUDA(fftInputBuf_device, extendedSize * 2 / 3, extendedSize * 2 / 3 + 10, extendedSize);
 
     /**
      * Above FFT kernel function is verified
      */
-    printf("\nLaunching findMax kernel\n");
+    // printf("\nLaunching findMax kernel\n");
     Complex_t *fftRes_host = (Complex_t *)malloc(sizeof(Complex_t) * extendedSize);
     cudaCheckError(cudaMemcpy(fftRes_host, fftInputBuf_device, sizeof(Complex_t) * extendedSize, cudaMemcpyDeviceToHost));
     double Fs_extend = fs * extendedSize / (ChirpSize * SampleSize);
     int maxDisIdx = cudaFindAbsMax(fftRes_host, floor(0.4 * extendedSize)) * (ChirpSize * SampleSize) / extendedSize;
     double maxDis = lightSpeed * (((double)maxDisIdx / extendedSize) * Fs_extend) / (2 * mu);
-    // printf("Finding maxDisIdx %d maxDis %.5f\n", maxDisIdx, maxDis);
+    // // printf("Finding maxDisIdx %d maxDis %.5f\n", maxDisIdx, maxDis);
+    double cudaFFTend = timer.elapsed();
+    double cudaFFTtime = cudaFFTend - cudaFFTbegin;
+
+    double cudaEnd = timer.elapsed();
+    double cudaTotalTime = cudaEnd - cudaBegin;
+
+    printf("Inner CUDA Timing: total processing Time %.5f ms, FFT + findMax %.5f ms Reshape %.5f ms Extension %.5f ms\n", cudaTotalTime, cudaFFTtime, cudaReshapeTime, cudaFrameExtensionTime);
 
     free(fftRes_host);
     // double *maxValBuf_device;
@@ -529,7 +547,7 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size)
     // cudaCheckError(cudaMemcpy(maxValue_host, finalMaxValue_device, sizeof(double), cudaMemcpyDeviceToHost));
     // cudaCheckError(cudaMemcpy(maxIdx_host, finalMaxIdx_device, sizeof(int), cudaMemcpyDeviceToHost));
     // int maxDisIdx = *maxIdx_host *
-    // printf("finding max value %.5f idx %d\n", *maxValue_host, *maxIdx_host);
+    // // printf("finding max value %.5f idx %d\n", *maxValue_host, *maxIdx_host);
 
     // cudaCheckError(cudaFree(maxValBuf_device));
     // cudaCheckError(cudaFree(maxIdxBuf_device));

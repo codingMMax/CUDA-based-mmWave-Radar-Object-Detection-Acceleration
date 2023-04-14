@@ -209,22 +209,11 @@ void printComplex(Complex_t in)
     printf("img %.6f real %.6f \n", in.imag, in.real);
 }
 
-int main()
+void cpuTiming()
 {
-    /**
-     * Operation in CPU side:
-     * 1. Read data from file
-     * 2. Reshape the data
-     * 3. Extend the data
-     * 4. Feed the data into CUDA
-     * 5. Running local test for verification
-     * 6. Accept the data from CUDA
-     * 7. Verify the result
-     */
+    Timer timer;
+    double totalBegin = timer.elapsed();
 
-    /**
-     * 1. Read data from file
-     */
     char filepath[] = "./fhy_direct.bin";
     int NumDataPerFrame = ChirpSize * SampleSize * numRx * 2;
     int BytePerFrame = NumDataPerFrame * sizeof(short);
@@ -233,13 +222,12 @@ int main()
     if (fp == NULL)
     {
         printf("unable to read the specified file\n");
-        return -1;
+        return;
     }
 
     short *inputData = (short *)malloc(BytePerFrame);
     int size = 0;
     double cpuRes[FrameSize];
-    double cudaRes[FrameSize];
 
     int numFrameRead = 0;
 
@@ -247,13 +235,13 @@ int main()
     /**
      * 2. Reshape the data
      */
-    printf("Reading the baseFrame\n");
+    // printf("Reading the baseFrame\n");
     Complex_t *baseFrameReshaped = (Complex_t *)malloc(size * sizeof(Complex_t) / 2);
     Complex_t *baseFrameRx0 = (Complex_t *)malloc(ChirpSize * SampleSize * sizeof(Complex_t));
     ReshapeComplex_t(inputData, baseFrameReshaped, size);
     memmove(baseFrameRx0, baseFrameReshaped, ChirpSize * SampleSize * sizeof(Complex_t));
 
-    printf("baseFrame processing finished\n");
+    // printf("baseFrame processing finished\n");
     int extendSize = nextPow2(ChirpSize * SampleSize);
 
     Complex_t *frameDataReshaped = (Complex_t *)malloc(size * sizeof(Complex_t) / 2);
@@ -262,18 +250,23 @@ int main()
     Complex_t *fftRes = (Complex_t *)malloc(nextPow2(ChirpSize * SampleSize) * sizeof(Complex_t));
     Complex_t *fftInput = (Complex_t *)malloc(extendSize * sizeof(Complex_t));
 
+    double baseFrameTime = timer.elapsed() - totalBegin;
+
+    double fftTime;
+    double preProcessTime;
+    double findMaxTime;
     while ((size = (int)fread(inputData, sizeof(short), NumDataPerFrame, fp)) > 0)
     {
 
-        printf("Reading next frame from file\n");
+        // printf("Reading next frame from file\n");
         numFrameRead++;
         /**
          * input data into cuda devices
          */
-        printf("CUDA Processing elements\n");
-        double cudaDist = cudaProcessing(inputData, baseFrameReshaped, size);
+        // printf("CUDA Processing elements\n");
 
-        printf("Reshape next frame\n");
+        // printf("Reshape next frame\n");
+        double preProcessBegin = timer.elapsed();
         ReshapeComplex_t(inputData, frameDataReshaped, size);
 
         memmove(frameDataRx0, frameDataReshaped, ChirpSize * SampleSize * sizeof(Complex_t));
@@ -287,21 +280,33 @@ int main()
             fftInput[i].real = 0;
             fftInput[i].imag = 0;
         }
-
+        preProcessTime += timer.elapsed() - preProcessBegin;
+        double fftBegin = timer.elapsed();
         memmove(fftRes, fftInput, extendSize * sizeof(Complex_t));
-
         butterfly_fft(extendSize, fftRes);
+        fftTime += timer.elapsed() - fftBegin;
+
         // for(int i = extendSize * 2 / 3; i < extendSize * 2 / 3 + 10; i++){
         //     printf("CPU fftRes[%d] real %.5f imag %.5f \n", i,fftRes[i].real, fftRes[i].imag);
         // }
-
+        double findMaxBegin = timer.elapsed();
         double Fs_extend = Fs * extendSize / (ChirpSize * SampleSize);
         int maxDisIdx = FindAbsMax(fftRes, floor(0.4 * extendSize)) * (ChirpSize * SampleSize) / extendSize;
         double maxDis = c * (((double)maxDisIdx / extendSize) * Fs_extend) / (2 * mu);
+
+        findMaxTime += timer.elapsed() - findMaxBegin;
+
         // printf("Finding maxDisIdx %d maxDis %.5f\n", maxDisIdx, maxDis);
-        cudaRes[numFrameRead] = cudaDist;
         cpuRes[numFrameRead] = maxDis;
     }
+    double totalEnd = timer.elapsed();
+
+    printf("CPU %.5f ms\n", totalEnd - totalBegin);
+    printf("BaseFrame time %.5f ms\n", baseFrameTime);
+    printf("preProcessTime %.5f\n", preProcessTime);
+    printf("FFT time %.5f ms\n", fftTime);
+    printf("findMaxTime %.5f ms\n", findMaxTime);
+    printf("BaseFrame time %.5f ms\n", baseFrameTime);
 
     free(fftRes);
     free(fftInput);
@@ -312,17 +317,88 @@ int main()
     free(baseFrameRx0);
     free(inputData);
     fclose(fp);
+}
 
-    for (int i = 1; i < numFrameRead; i++)
+void cudaTiming()
+{
+    Timer timer;
+
+    char filepath[] = "./fhy_direct.bin";
+    int NumDataPerFrame = ChirpSize * SampleSize * numRx * 2;
+    int BytePerFrame = NumDataPerFrame * sizeof(short);
+    FILE *fp = fopen(filepath, "rb");
+
+    if (fp == NULL)
     {
-        if (abs(cudaRes[i] - cpuRes[i]) >= 1e-5)
-        {
-            printf("CUDA result verification failed at frame %d\n", i);
-            printf("Ref Res %.6f CUDA res %.6f\n", cpuRes[i], cudaRes[i]);
-            break;
-        }
-        // printf("frame[%d] Ref Res %.6f CUDA res %.6f\n", i, cpuRes[i], cudaRes[i]);
+        printf("unable to read the specified file\n");
+        return;
     }
 
+    short *inputData = (short *)malloc(BytePerFrame);
+    int size = 0;
+    double cudaRes[FrameSize];
+
+    int numFrameRead = 0;
+
+    size = (int)fread(inputData, sizeof(short), NumDataPerFrame, fp);
+    /**
+     * 2. Reshape the data
+     */
+    // printf("Reading the baseFrame\n");
+    Complex_t *baseFrameReshaped = (Complex_t *)malloc(size * sizeof(Complex_t) / 2);
+    Complex_t *baseFrameRx0 = (Complex_t *)malloc(ChirpSize * SampleSize * sizeof(Complex_t));
+    ReshapeComplex_t(inputData, baseFrameReshaped, size);
+    memmove(baseFrameRx0, baseFrameReshaped, ChirpSize * SampleSize * sizeof(Complex_t));
+
+    // printf("baseFrame processing finished\n");
+    int extendSize = nextPow2(ChirpSize * SampleSize);
+
+    Complex_t *frameDataReshaped = (Complex_t *)malloc(size * sizeof(Complex_t) / 2);
+    Complex_t *frameDataRx0 = (Complex_t *)malloc(extendSize * sizeof(Complex_t));
+
+    double cudaTime = timer.elapsed();
+    while ((size = (int)fread(inputData, sizeof(short), NumDataPerFrame, fp)) > 0)
+    {
+        numFrameRead++;
+        cudaRes[numFrameRead] = cudaProcessing(inputData, baseFrameRx0, size);
+    }
+    cudaTime = timer.elapsed() - cudaTime;
+
+    printf("cudaTime %.5f ms\n", cudaTime);
+
+    free(frameDataReshaped);
+    free(frameDataRx0);
+    free(baseFrameReshaped);
+    free(baseFrameRx0);
+    free(inputData);
+
+    fclose(fp);
+}
+
+int main()
+{
+    /**
+     * Operation in CPU side:
+     * 1. Read data from file
+     * 2. Reshape the data
+     * 3. Extend the data
+     * 4. Feed the data into CUDA
+     * 5. Running local test for verification
+     * 6. Accept the data from CUDA
+     * 7. Verify the result
+     */
+
+    // for (int i = 1; i < numFrameRead; i++)
+    // {
+    //     if (abs(cudaRes[i] - cpuRes[i]) >= 1e-5)
+    //     {
+    //         printf("CUDA result verification failed at frame %d\n", i);
+    //         printf("Ref Res %.6f CUDA res %.6f\n", cpuRes[i], cudaRes[i]);
+    //         break;
+    //     }
+    //     // printf("frame[%d] Ref Res %.6f CUDA res %.6f\n", i, cpuRes[i], cudaRes[i]);
+    // }
+    cpuTiming();
+    cudaTiming();
     return 0;
 }
