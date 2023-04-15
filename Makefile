@@ -16,7 +16,7 @@ NVCC=nvcc
 NVCCFLAGS=-O3 -m64 --gpu-architecture compute_61 -ccbin /usr/bin/gcc
 
 
-OBJS=$(OBJDIR)/main.o  $(OBJDIR)/acceleration.o
+OBJS=$(OBJDIR)/cudaBenchMarking.o  $(OBJDIR)/acceleration.o
 
 .PHONY: dirs clean
 
