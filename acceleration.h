@@ -7,11 +7,13 @@
 #include <string.h>
 #include <chrono>
 
-class Timer {
+class Timer
+{
 public:
   Timer() : beg_(clock_::now()) {}
   void reset() { beg_ = clock_::now(); }
-  double elapsed() const {
+  double elapsed() const
+  {
     return std::chrono::duration_cast<second_>(clock_::now() - beg_).count();
   }
 
@@ -22,10 +24,11 @@ private:
 };
 
 // complex struct and complex algorithm
-struct Complex_t {
-    double real, imag;
+struct Complex_t
+{
+  double real, imag;
 };
 
-double cudaProcessing(short* deviceIn, Complex_t* host_baseFrame, int size);
+double cudaProcessing(short *deviceIn, Complex_t *host_baseFrame, int size, double *fftTime, double *preProcessTime, double *findMaxTime, double *totalTime);
 
 #endif

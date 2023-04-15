@@ -414,7 +414,7 @@ int cudaFindAbsMax(Complex_t *ptr, int size)
 //  * 4. Find the peak absolute amplitude in transfomed results
 //  * 5. Return the peak value to host CPU for verification
 //  */
-double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size)
+double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size, double *fftTime, double *preProcessTime, double *findMaxTime, double *totalTime)
 {
     // accept the input data and reshape the data
     // define the kernel parameters
@@ -517,17 +517,24 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size)
     // printf("\nLaunching findMax kernel\n");
     Complex_t *fftRes_host = (Complex_t *)malloc(sizeof(Complex_t) * extendedSize);
     cudaCheckError(cudaMemcpy(fftRes_host, fftInputBuf_device, sizeof(Complex_t) * extendedSize, cudaMemcpyDeviceToHost));
+    double cudaFindMaxTime = timer.elapsed();
     double Fs_extend = fs * extendedSize / (ChirpSize * SampleSize);
     int maxDisIdx = cudaFindAbsMax(fftRes_host, floor(0.4 * extendedSize)) * (ChirpSize * SampleSize) / extendedSize;
     double maxDis = lightSpeed * (((double)maxDisIdx / extendedSize) * Fs_extend) / (2 * mu);
     // // printf("Finding maxDisIdx %d maxDis %.5f\n", maxDisIdx, maxDis);
+    cudaFindMaxTime = timer.elapsed() - cudaFindMaxTime;  
+
     double cudaFFTend = timer.elapsed();
     double cudaFFTtime = cudaFFTend - cudaFFTbegin;
 
     double cudaEnd = timer.elapsed();
     double cudaTotalTime = cudaEnd - cudaBegin;
 
-    printf("Inner CUDA Timing: total processing Time %.5f ms, FFT + findMax %.5f ms Reshape %.5f ms Extension %.5f ms\n", cudaTotalTime, cudaFFTtime, cudaReshapeTime, cudaFrameExtensionTime);
+    printf("Inner CUDA Timing:single round processing Time %.5f ms, FFT + findMax %.5f ms Reshape %.5f ms Extension %.5f ms\n", 1000.0 * cudaTotalTime, 1000.0 * cudaFFTtime, 1000.0 * cudaReshapeTime, 1000.0 * cudaFrameExtensionTime);
+    *totalTime += cudaTotalTime;
+    *findMaxTime += cudaFindMaxTime;
+    *preProcessTime += (cudaReshapeTime + cudaFrameExtensionTime);
+    *fftTime += cudaFFTtime;
 
     free(fftRes_host);
     // double *maxValBuf_device;
