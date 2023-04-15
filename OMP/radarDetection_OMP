@@ -519,9 +519,7 @@ void ReshapeComplex(short *OriginalArray, Complex *Reshape, int size){
     Complex *complex_ptr = buf_complex;
     // reshape into 2 form of complex
 
-    // # pragma omp parallel \
-    // shared ( size, x, z ) \
-    // private ( i, z0, z1 )
+    // #
 
     // # pragma omp for nowait
     // #pragma omp for schedule(static, 64) nowait
@@ -699,7 +697,7 @@ int DectectDis(char *filepath, double *Dis){
         // ----------------------- FFT data ------------------------
         Complex *frm_ptr = Data_Frm_rx;
         // FFTextend(Data_Frm_rx, Data_fft, ChripSize*SampleSize);
-        FFTextend(Data_Frm_rx, Data_fft, ChripSize*SampleSize);
+        FFTextend_OMP(Data_Frm_rx, Data_fft, ChripSize*SampleSize);
         // ----------------------- FFT data ------------------------
         fftend = clock();
         // printComplex( Data_fft, 100);
@@ -733,13 +731,7 @@ int DectectDis(char *filepath, double *Dis){
         //     cnt+=1;
         // } 
 
-        // cost=difftime(end,start);  
-        // printf("frm=%d,  ",  frm);
-        // printf("maxDisidx=%d,  maxDis=%lf,  ",  maxDisidx, maxDis);
-        // printf("latency=%fs,  throughput=%ffrm/s, ",cost/CLOCKS_PER_SEC, 1/(cost/CLOCKS_PER_SEC));  
-        // printf("read=%fms,  reshape=%fms,  fft=%fms,  findmax=%fms\n", 
-        // difftime(readend,readstart)/CLOCKS_PER_SEC*1000,  difftime(rpend,rpstart)/CLOCKS_PER_SEC*1000,  
-        // difftime(fftend,fftstart)/CLOCKS_PER_SEC*1000 , difftime(maxend,maxstart)/CLOCKS_PER_SEC*1000); 
+ 
     }
     
     fclose(infile);
@@ -750,10 +742,7 @@ int DectectDis(char *filepath, double *Dis){
     free(Data_fft);
     free(Data_Frm0);
     free(Data_Frm0_reshape);
-    // printf("\ncnt=%d, totaltime=%fms, read=%fms,  reshape=%fms,  fft=%fms,  findmax=%fms\n",
-    // cnt ,  totaltime/cnt,
-    // readtime/cnt,  rptime/cnt,  
-    // ffttime/cnt , maxtime/cnt); 
+
     printf("\ncnt=%d, totaltime=%fms, thp=%ffrm/s read=%fms,  reshape=%fms,  fft=%fms,  findmax=%fms\n",
     cnt ,  totaltime, 1000*89/totaltime,
     readtime,  rptime,  
@@ -762,59 +751,8 @@ int DectectDis(char *filepath, double *Dis){
     
 }
 
-void testOMP(){
-    int i;
-    double data_double[32];
-    double y[32]; 
-    double w[16];
-    Complex data_complex[16];
-    Complex res[16];
-    // for(i=0 ; i< 16; i++){
-    //     *(data_double+i) = 0;
-    // }
-    // *(data_double) = 1;
-    // *(data_double+1)=1;
-
-    for(i=0 ; i< 16; i++){
-        *(data_double+2*i) = i;
-        *(data_double+2*i+1) = 16-i ;// 2*i+1;
-        // *(data_double+2*i) = i;
-        // *(data_double+2*i+1) = 0 ;
-        (data_complex+i)->real =i;
-        (data_complex+i)->imag =16-i;
-    }
-    
-     FFTextend(data_complex, res, 16);
-     for(i=0 ; i< 16; i++){
-        printf("i = %d, real= %lf, imag =%lf \n",i, (res+i)->real,(res+i)->imag);
-         
-    }
-
-    
-    //  for(i=0 ; i< 16; i++){
-    //     printf("i = %d, real= %lf, imag =%lf \n",i, *(data_double+2*i),*(data_double+2*i+1));
-    // }
-    cffti(16, w);
-    // sgn = + 1.0;
-    // cfft2 ( n, x, y, w, 1 );
-    // sgn = - 1.0;
-    // cfft2 ( n, y, x, w, sgn );
-    cfft2(16, data_double, y, w, -1);
-    // cfft2(16, y, data_double, w, -1);
-    
-
-    //  for(i=0 ; i< 16; i++){
-    //     printf("i = %d, real= %lf, imag =%lf \n",i, *(data_double+2*i),*(data_double+2*i+1));
-         
-    // }
-         for(i=0 ; i< 16; i++){
-        printf("i = %d, real= %lf, imag =%lf \n",i, *(y+2*i),*(y+2*i+1));
-         
-    }
 
    
-
-}
 
 int main(){
     char filepath[] = "./fhy_direct.bin";
