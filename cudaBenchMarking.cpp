@@ -273,6 +273,7 @@ void cpuTiming()
         ReshapeComplex_t(inputData, frameDataReshaped, size);
 
         memmove(frameDataRx0, frameDataReshaped, ChirpSize * SampleSize * sizeof(Complex_t));
+
         // extend the frame data
         for (int i = 0; i < SampleSize * ChirpSize; i++)
         {
@@ -283,6 +284,18 @@ void cpuTiming()
             fftInput[i].real = 0;
             fftInput[i].imag = 0;
         }
+
+        // printf("CPU substraction\n");
+        // for (int i = 0; i < 10; i++)
+        // {
+        //     printf("frameDataReshaped[%d] real: %.5f  img: %.5f\n", i, frameDataReshaped[i].real, frameDataReshaped[i].imag);
+        // }
+        // printf("CPU fft input\n");
+        // for (int i = 0; i < 10; i++)
+        // {
+        //     printf("fftInput[%d] real: %.5f  img: %.5f\n", i, fftInput[i].real, fftInput[i].imag);
+        // }
+
         double preProcessEnd = timer.elapsed();
 
         preProcessTime += (preProcessEnd - preProcessBegin);
@@ -305,8 +318,9 @@ void cpuTiming()
 
         findMaxTime += (findMaxEnd - findMaxBegin);
 
-        // printf("Finding maxDisIdx %d maxDis %.5f\n", maxDisIdx, maxDis);
         cpuRes[numFrameRead] = maxDis;
+        printf("cpuRes[%d] maxDis %.5f\n", numFrameRead, maxDis);
+
     }
 
     free(fftRes);
@@ -375,6 +389,7 @@ void cudaTiming()
     {
         numFrameRead++;
         cudaRes[numFrameRead] = cudaProcessing(inputData, baseFrameRx0, size, &fftTime, &preProcessTime, &findMaxTime, &totalTime);
+        printf("cudaRes[%d] %.6f\n", numFrameRead, cudaRes[numFrameRead]);
     }
 
     free(frameDataReshaped);
@@ -417,8 +432,8 @@ int main()
     //     }
     //     // printf("frame[%d] Ref Res %.6f CUDA res %.6f\n", i, cpuRes[i], cudaRes[i]);
     // }
-    printf("CPU Timing\n");
-    cpuTiming();
+    // printf("CPU Timing\n");
+    // cpuTiming();
     printf("CUDA Timing\n");
     cudaTiming();
 

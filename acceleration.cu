@@ -135,9 +135,9 @@ __global__ void cudaComplexReshape_kernel(Complex_t *destArray, Complex_t *srcAr
 
         int sampleIdx = srcIdx - chirpIdx * RxSize * SampleSize - rxIdx * SampleSize;
 
-        int desidxx = rxIdx * ChirpSize * SampleSize + chirpIdx * SampleSize + sampleIdx;
+        int destIdx = rxIdx * ChirpSize * SampleSize + chirpIdx * SampleSize + sampleIdx;
 
-        destPtr = destArray + desidxx;
+        destPtr = destArray + destIdx;
         srcPtr = srcArray + srcIdx;
 
         destPtr->real = srcPtr->real;
@@ -153,7 +153,7 @@ __global__ void cudaDataExtension_kernel(Complex_t *baseFrame, Complex_t *extend
 {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
     // set the extended part as zero
-    if (idx < extendedSize && idx > oldSize)
+    if (idx < extendedSize && idx >= oldSize)
     {
         extendedBuffer[idx].real = 0;
         extendedBuffer[idx].imag = 0;
@@ -178,13 +178,13 @@ __device__ int bitsReverse(int num, int bits)
     return rev;
 }
 
-__global__ void cudaBitsReverse_kernel(Complex_t *input, int size, int pow_test)
+__global__ void cudaBitsReverse_kernel(Complex_t *input, int size, int pow)
 {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
     if (idx < size)
     {
         // swap the position
-        int pairIdx = bitsReverse(idx, pow_test);
+        int pairIdx = bitsReverse(idx, pow);
         if (pairIdx > idx)
         {
             Complex_t temp = input[idx];
@@ -199,14 +199,14 @@ __global__ void cudaBitsReverse_kernel(Complex_t *input, int size, int pow_test)
  * @param: size: total size of input complex_t sequence
  * @param: stage: current stage of the FFT kernel, starting from 1
  */
-__global__ void cudaButterflyFFT_kernel(Complex_t *data, int size, int stage, int pow_test)
+__global__ void cudaButterflyFFT_kernel(Complex_t *data, int size, int stage, int pow)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     // Perform butterfly operation for each pair of elements at the current stage
     if (idx < size)
     {
         // calculate butterfly coefficient pow_tester
-        int Wn_k = (1 << (pow_test - stage)) * idx % size;
+        int Wn_k = (1 << (pow - stage)) * idx % size;
         // butterfly coefficient = Wn ^ Wn_k
         // Wn = e^(-2j*pi/Size)
         // Wn ^ Wn_k = e ^ (-2j*pi*Wn_k/Size)
@@ -219,16 +219,20 @@ __global__ void cudaButterflyFFT_kernel(Complex_t *data, int size, int stage, in
         int upper_bound = lower_bound + group_size;
         int pairIdx = idx + step;
         Complex_t product, sum;
-        // product = p * a
-        product = cudaComplexMul(twiddle, data[pairIdx]);
-        // sum = q + (-1) * p * a
-        sum = cudaComplexAdd(data[idx], product);
+
         // data[idx] = q - p*a
         if (pairIdx >= upper_bound)
         {
             pairIdx = idx - step;
             product = cudaComplexMul(twiddle, data[idx]);
             sum = cudaComplexAdd(data[pairIdx], product);
+        }
+        else
+        {
+            // product = p * a
+            product = cudaComplexMul(twiddle, data[pairIdx]);
+            // sum = q + (-1) * p * a
+            sum = cudaComplexAdd(data[idx], product);
         }
         // write into the index position
         // __syncthreads();
@@ -245,73 +249,6 @@ __global__ void cudaButterflyFFT_kernel(Complex_t *data, int size, int stage, in
         return;
     }
 }
-/**
- * kernel function to find the maxium value in the input FFT result and corresponding index
- * @param: data: input complex data
- * @param: size: input size
- * @param: maxValBuf: buffer to store the parallel selected local maxium values in each block, size = THREADS_PER_BLOCK
- * @param: maxIdxBuf: buffer to store the parallel selected maxium value corresponding index, size = THREADS_PER_BLOCK
- * @param: finalMaxValue: final sorted global maxium value
- * @param: finalMaxIdx: final sroted global maxium value corresponding index
- */
-__global__ void cudaFindMax_kernel(Complex_t *data, int size, double *maxValBuf, int *maxIdxBuf, double *finalMaxValue, int *finalMaxIdx)
-{
-    int globalIdx = blockDim.x * blockIdx.x + threadIdx.x;
-    if (globalIdx < size)
-    {
-        // load the corresponding data into local block-shared memory
-        double tmp = 0.0f;
-        int maxIdx = 0;
-        extern __shared__ Complex_t maxCache[THREADS_PER_BLOCK];
-        extern __shared__ int idxCache[THREADS_PER_BLOCK];
-        int localIdx = threadIdx.x;
-
-        maxCache[localIdx] = data[globalIdx];
-        idxCache[localIdx] = globalIdx;
-
-        __syncthreads();
-        if (localIdx == 0)
-        {
-            for (int i = 0; i < THREADS_PER_BLOCK; i++)
-            {
-                double absVal = cudaComplexMol(maxCache[i]);
-                if (absVal > tmp)
-                {
-                    tmp = absVal;
-                    maxIdx = idxCache[i];
-                }
-            }
-            // write the compared value into global memory
-            maxValBuf[blockIdx.x] = tmp;
-            maxIdxBuf[blockIdx.x] = maxIdx;
-        }
-        __syncthreads();
-        // once the maxVal array is filled. Find the max value in the maxVal array
-        if (globalIdx < THREADS_PER_BLOCK)
-        {
-            extern __shared__ double finalMaxCache[THREADS_PER_BLOCK];
-            extern __shared__ int finalIdxCache[THREADS_PER_BLOCK];
-            finalMaxCache[globalIdx] = maxValBuf[globalIdx];
-            finalIdxCache[globalIdx] = maxIdxBuf[globalIdx];
-            __syncthreads();
-            if (globalIdx == 0)
-            {
-                double finalMax = 0.0;
-                int finalIdx;
-                for (int i = 0; i < THREADS_PER_BLOCK; i++)
-                {
-                    if (finalMaxCache[i] > finalMax)
-                    {
-                        finalMax = finalMaxCache[i];
-                        finalIdx = finalIdxCache[i];
-                    }
-                }
-                *finalMaxValue = finalMax;
-                *finalMaxIdx = finalIdx;
-            }
-        }
-    }
-}
 
 void printComplexCUDA(Complex_t *input, int start, int end, int size)
 {
@@ -323,7 +260,7 @@ void printComplexCUDA(Complex_t *input, int start, int end, int size)
 
     for (int i = start; i < end; i++)
     {
-        // printf("cudaComplex[%d] real: %.5f  img: %.5f\n", i, cpuData[i].real, cpuData[i].imag);
+        printf("cudaComplex[%d] real: %.5f  img: %.5f\n", i, cpuData[i].real, cpuData[i].imag);
     }
     free(cpuData);
 }
@@ -388,6 +325,8 @@ void fftTest()
     cudaFree(fftInputBuf_test_device);
     free(testInputHost_test);
 }
+
+
 int cudaFindAbsMax(Complex_t *ptr, int size)
 {
     int maxidx = 0;
@@ -445,7 +384,7 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size, do
     double cudaReshapeBegin = timer.elapsed();
     cudaShort2Complex_kernel<<<numBlocksShortKernel, THREADS_PER_BLOCK>>>(input_device, buffer, size);
     cudaDeviceSynchronize();
-    // printComplexCUDA(buffer,25000,25010,SampleSize * ChirpSize * RxSize);
+    // printComplexCUDA(buffer, 25000, 25010, SampleSize * ChirpSize * RxSize);
 
     /**
      * Above short2complex kernel is verified
@@ -455,8 +394,8 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size, do
     cudaDeviceSynchronize();
     double cudaReshapeEnd = timer.elapsed();
     double cudaReshapeTime = cudaReshapeEnd - cudaReshapeBegin;
-    // // printf("\nreshaped Array\n");
-    // printComplexCUDA(reshapedArray,37035,37039,SampleSize * ChirpSize * RxSize);
+    // printf("\nreshaped Array\n");
+    // printComplexCUDA(reshapedArray,37259,37270,SampleSize * ChirpSize * RxSize);
     // printComplexCUDA(reshapedArray,0,10,SampleSize * ChirpSize * RxSize);
     /**
      * Above reshape kernel is verified
@@ -498,6 +437,8 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size, do
     Complex_t *fftInputBuf_device;
     cudaCheckError(cudaMalloc((void **)&fftInputBuf_device, sizeof(Complex_t) * extendedSize));
     cudaCheckError(cudaMemcpy(fftInputBuf_device, rx0ExtendedBuffer_device, sizeof(Complex_t) * extendedSize, cudaMemcpyDeviceToDevice));
+    // printf("fft input buffer\n");
+    // printComplexCUDA(fftInputBuf_device, 7777, 7781, extendedSize);
 
     int blocksFFTKernel = (extendedSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     cudaBitsReverse_kernel<<<blocksFFTKernel, THREADS_PER_BLOCK>>>(fftInputBuf_device, extendedSize, log2(extendedSize));
@@ -508,7 +449,7 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size, do
         // // printf("stage %d\n", stage);
         cudaButterflyFFT_kernel<<<blocksFFTKernel, THREADS_PER_BLOCK>>>(fftInputBuf_device, extendedSize, stage + 1, pow);
     }
-    // // printf("FFT result \n");
+    // printf("FFT result \n");
     // printComplexCUDA(fftInputBuf_device, extendedSize * 2 / 3, extendedSize * 2 / 3 + 10, extendedSize);
 
     /**
@@ -517,12 +458,14 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size, do
     // printf("\nLaunching findMax kernel\n");
     Complex_t *fftRes_host = (Complex_t *)malloc(sizeof(Complex_t) * extendedSize);
     cudaCheckError(cudaMemcpy(fftRes_host, fftInputBuf_device, sizeof(Complex_t) * extendedSize, cudaMemcpyDeviceToHost));
+
     double cudaFindMaxTime = timer.elapsed();
     double Fs_extend = fs * extendedSize / (ChirpSize * SampleSize);
     int maxDisIdx = cudaFindAbsMax(fftRes_host, floor(0.4 * extendedSize)) * (ChirpSize * SampleSize) / extendedSize;
     double maxDis = lightSpeed * (((double)maxDisIdx / extendedSize) * Fs_extend) / (2 * mu);
+    
     // // printf("Finding maxDisIdx %d maxDis %.5f\n", maxDisIdx, maxDis);
-    cudaFindMaxTime = timer.elapsed() - cudaFindMaxTime;  
+    cudaFindMaxTime = timer.elapsed() - cudaFindMaxTime;
 
     double cudaFFTend = timer.elapsed();
     double cudaFFTtime = cudaFFTend - cudaFFTbegin;
@@ -530,7 +473,7 @@ double cudaProcessing(short *input_host, Complex_t *host_baseFrame, int size, do
     double cudaEnd = timer.elapsed();
     double cudaTotalTime = cudaEnd - cudaBegin;
 
-    printf("Inner CUDA Timing:single round processing Time %.5f ms, FFT + findMax %.5f ms Reshape %.5f ms Extension %.5f ms\n", 1000.0 * cudaTotalTime, 1000.0 * cudaFFTtime, 1000.0 * cudaReshapeTime, 1000.0 * cudaFrameExtensionTime);
+    // printf("Inner CUDA Timing:single round processing Time %.5f ms, FFT + findMax %.5f ms Reshape %.5f ms Extension %.5f ms\n", 1000.0 * cudaTotalTime, 1000.0 * cudaFFTtime, 1000.0 * cudaReshapeTime, 1000.0 * cudaFrameExtensionTime);
     *totalTime += cudaTotalTime;
     *findMaxTime += cudaFindMaxTime;
     *preProcessTime += (cudaReshapeTime + cudaFrameExtensionTime);
