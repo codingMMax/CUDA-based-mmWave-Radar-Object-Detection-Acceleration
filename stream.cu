@@ -400,8 +400,10 @@ int cudaFindAbsMax(Complex_t *ptr, int size)
  * @return: double format calculated distance of moving object
  *
  */
-double cudaProcessing(short *input_host, Complex_t *base_frame_rx0_device, Complex_t *frame_buffer_device, Complex_t *frame_reshaped_device, Complex_t *frame_reshaped_rx0_device, int size, int rx0_extended_size)
+double cudaProcessingStream(double& fftTime, double& preProcessingTime, double& findMaxTime, double& totalTime,short *input_host, Complex_t *base_frame_rx0_device, Complex_t *frame_buffer_device, Complex_t *frame_reshaped_device, Complex_t *frame_reshaped_rx0_device, int size, int rx0_extended_size)
 {
+    Timer timer;
+    double start = timer.elapsed();
     int num_blocks_preProcessing = (THREADS_PER_BLOCK + size - 1) / THREADS_PER_BLOCK;
     /**Allocate memory space for current frame*/
     short *input_device;
@@ -431,6 +433,10 @@ double cudaProcessing(short *input_host, Complex_t *base_frame_rx0_device, Compl
     rx0Extension_kernel<<<num_blocks_preProcessing, THREADS_PER_BLOCK>>>(base_frame_rx0_device, rx0_fft_input_device, frame_reshaped_device, SampleSize * ChirpSize, rx0_extended_size);
     // printf("after reshaped kernel FFT input \n");
     // printComplexCUDA(rx0_fft_input_device, 7777, 7781, rx0_extended_size);
+    
+    double preProcessingEnd = timer.elapsed();
+    double fftStart = preProcessingEnd;
+    preProcessingTime += preProcessingEnd - start;
 
     int cnt = 1, pow = 0;
     while (cnt < rx0_extended_size)
@@ -445,8 +451,13 @@ double cudaProcessing(short *input_host, Complex_t *base_frame_rx0_device, Compl
         butterflyFFT_kernel<<<num_blocks_preProcessing, THREADS_PER_BLOCK>>>(rx0_fft_input_device, rx0_extended_size, i + 1, pow);
         cudaDeviceSynchronize();
     }
+
+    double fftEnd = timer.elapsed();
+    double findMaxStart = fftEnd;
+    fftTime += fftEnd - fftStart;
     // printf("FFT res \n");
     // printComplexCUDA(rx0_fft_input_device, rx0_extended_size * 2 / 3, rx0_extended_size * 2 / 3 + 10, rx0_extended_size);
+
 
     double Fs_extend = fs * rx0_extended_size / (ChirpSize * SampleSize);
 
@@ -455,6 +466,11 @@ double cudaProcessing(short *input_host, Complex_t *base_frame_rx0_device, Compl
     int maxDisIdx = cudaFindAbsMax(rx0_fft_res, floor(0.4 * rx0_extended_size)) * (ChirpSize * SampleSize) / rx0_extended_size;
 
     double maxDis = lightSpeed * (((double)maxDisIdx / rx0_extended_size) * Fs_extend) / (2 * mu);
+
+    double findMaxEnd = timer.elapsed();
+    findMaxTime += findMaxEnd - findMaxStart;
+
+    totalTime += timer.elapsed() - start;
 
     free(rx0_fft_res);
     cudaCheckError(cudaFree(input_device));
@@ -513,17 +529,22 @@ int main(int argc, char *argv[])
 
     Timer timer;
     double start = timer.elapsed();
-
+    double fftTime = 0, preProcessingTime = 0, findMaxTime = 0, totalTime = 0;
     while ((size = (int)fread(read_data, sizeof(short), data_per_frame, fp)) > 0)
     {
 
-        cudaRes[frameCnt] = cudaProcessing(read_data, base_frame_rx0_device, frame_buffer_device, frame_reshaped_device, frame_reshaped_rx0_device, size, rx0_extended_size);
+        cudaRes[frameCnt] = cudaProcessingStream(fftTime, preProcessingTime, findMaxTime, totalTime, read_data, base_frame_rx0_device, frame_buffer_device, frame_reshaped_device, frame_reshaped_rx0_device, size, rx0_extended_size);
         printf("cudaRes[%d] %.6f \n", frameCnt, cudaRes[frameCnt]);
         frameCnt++;
     }
 
     double duration = (timer.elapsed() - start);
-    printf("CUDA Stream total time %.3f ms, FPS %.3f \n", 1000.0 * duration, frameCnt / duration);
+    printf("CUDA Stream outer total time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * duration, 1000.0 *duration / frameCnt ,frameCnt / duration);
+    printf("CUDA Stream inner total time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * totalTime, 1000.0 *totalTime / frameCnt,frameCnt / totalTime);
+    printf("CUDA Stream total fft time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * fftTime, 1000.0 * fftTime / frameCnt ,frameCnt / fftTime);
+    printf("CUDA Stream total preProcessing time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * preProcessingTime, 1000.0 *preProcessingTime / frameCnt ,frameCnt / preProcessingTime);
+    printf("CUDA Stream total findMaxTime time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * findMaxTime, 1000.0 *findMaxTime / frameCnt ,frameCnt / findMaxTime);
+
 
     // end region
     cudaCheckError(cudaFree(frame_buffer_device));
