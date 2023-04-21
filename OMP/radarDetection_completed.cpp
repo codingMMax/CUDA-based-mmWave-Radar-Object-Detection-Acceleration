@@ -898,14 +898,28 @@ int Kernel_radarDectection(char *filepath, double *Dis, double *Agl, double *Spd
         }
 
          //--------------- find Max -----------------
-        int max2dfft =FindAbsMax(Data_2dfft, ChirpSize * SampleSize);
-        // TODO: make sure the sequence of this is totally correct
-        int maxSDisidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) % ChirpSize;
-        int maxSpdidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) / ChirpSize;
+        // int max2dfft =FindAbsMax(Data_2dfft, ChirpSize * SampleSize);
+        // // TODO: make sure the sequence of this is totally correct\
+        // // col
+        // int maxSDisidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) % ChirpSize;
+        // // row
+        // int maxSpdidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) / ChirpSize;
+        // // int maxSpdidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) % ChirpSize;
+        // // int maxSDisidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) / ChirpSize;
+        // double maxSpd = ((maxSpdidx)*fr/ChirpSize - fr/2)*lamda/2;
+        // double maxSDis = ((maxSDisidx)*Fs/SampleSize )*cspd/(2*mu)*100/128;
+        // // the whole formula  maxDis = c*(((double)maxDisidx*Fs/(ChirpSize*SampleSize)))/(2*mu);
+
+        int max2dfft =FindAbsMax(Data_2dfft_tp, 0.4* ChirpSize * SampleSize);
+        // TODO: make sure the sequence of this is totally correct\
+        // col
+        int maxSDisidx = FindAbsMax(Data_2dfft_tp, 0.4* ChirpSize * SampleSize) / ChirpSize;
+        // row
+        int maxSpdidx = FindAbsMax(Data_2dfft_tp, ChirpSize * SampleSize) % ChirpSize;
         // int maxSpdidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) % ChirpSize;
         // int maxSDisidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) / ChirpSize;
-        double maxSpd = ((maxSpdidx-chp_mid)*fr/ChirpSize - fr/2)*lamda/2;
-        double maxSDis = ((maxSDisidx-smp_mid)*Fs/SampleSize )*cspd/(2*mu);
+        double maxSpd = ((maxSpdidx)*fr/ChirpSize - fr/2)*lamda/2;
+        double maxSDis = ((maxSDisidx)*Fs/SampleSize )*cspd/(2*mu);
         // the whole formula  maxDis = c*(((double)maxDisidx*Fs/(ChirpSize*SampleSize)))/(2*mu);
         *(Spd + frm) = maxSpd ;
 
@@ -957,16 +971,17 @@ int Kernel_radarDectection(char *filepath, double *Dis, double *Agl, double *Spd
 
 
         // print: result
-        printf("\nfrm=%d,  ",  frm);
+        printf("frm=%d,  ",  frm);
         printf("maxDisidx=%d,  maxDis=%lf,  ",  maxDisidx, maxDis);
         printf("maxAglidx=%d,  maxAgl=%lf,  ",  maxAglidx, maxAgl);
-        printf("max2dfft=%d, maxSpdidx=%d,  maxSpd=%lf, maxSpdDisIdx=%d, maxSpdDis=%lf\n ", max2dfft, maxSpdidx, maxSpd, maxSDisidx, maxSDis);
+        printf("maxSpdidx=%d,  maxSpd=%lf, maxSpdDisIdx=%d, maxSpdDis=%lf\n ",maxSpdidx, maxSpd, maxSDisidx, maxSDis);
+        // printf("max2dfft=%d, maxSpdidx=%d,  maxSpd=%lf, maxSpdDisIdx=%d, maxSpdDis=%lf\n ", max2dfft, maxSpdidx, maxSpd, maxSDisidx, maxSDis);
         // print: time
-        printf("latency=%fs,  throughput=%ffrm/s, ",difftime(end,start)/CLOCKS_PER_SEC*1000, 1/(difftime(end,start)/CLOCKS_PER_SEC));  
-        printf("read=%fms,  reshape=%fms,  Distime=%fms,  Agltime=%fms, Spdtime=%fms\n", 
-        difftime(readend,readstart)/CLOCKS_PER_SEC*1000,  difftime(rpend,rpstart)/CLOCKS_PER_SEC*1000,  
-        difftime(Disend, Disstart)/CLOCKS_PER_SEC*1000 ,  difftime(Aglend,Aglstart)/CLOCKS_PER_SEC*1000,
-        difftime(Spdend,Spdstart)/CLOCKS_PER_SEC*1000 ); 
+        // printf("latency=%fs,  throughput=%ffrm/s, ",difftime(end,start)/CLOCKS_PER_SEC*1000, 1/(difftime(end,start)/CLOCKS_PER_SEC));  
+        // printf("read=%fms,  reshape=%fms,  Distime=%fms,  Agltime=%fms, Spdtime=%fms\n", 
+        // difftime(readend,readstart)/CLOCKS_PER_SEC*1000,  difftime(rpend,rpstart)/CLOCKS_PER_SEC*1000,  
+        // difftime(Disend, Disstart)/CLOCKS_PER_SEC*1000 ,  difftime(Aglend,Aglstart)/CLOCKS_PER_SEC*1000,
+        // difftime(Spdend,Spdstart)/CLOCKS_PER_SEC*1000 ); 
     }
     
     fclose(infile);
