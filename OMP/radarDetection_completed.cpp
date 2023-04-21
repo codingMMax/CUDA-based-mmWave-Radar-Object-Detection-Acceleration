@@ -1,3 +1,9 @@
+// Updates:
+// now the omp sitll has some bugs make it unstably become slow. 
+// So now you can use the command line:
+// g++ radarDetection_OMP.cpp -o OpenMPAcc
+// This is just for the baseline.  This is totally correctly now for all the three kernel.
+
 #include <stdio.h>
 #include <math.h>
 // #include <iostream>
