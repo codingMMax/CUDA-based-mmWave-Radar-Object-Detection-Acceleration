@@ -1,6 +1,8 @@
 # ignore all log and txt files
 *.txt
 *.log
+# ignore all the OMP files
+OMP/*
 # ignore all the compiled files
 *.o
 *.c.o
@@ -17,3 +19,4 @@
 #ignore the cmake file
 cmake-build-debug/
 .idea/
+

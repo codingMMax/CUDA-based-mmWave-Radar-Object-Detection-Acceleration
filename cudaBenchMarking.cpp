@@ -1,4 +1,5 @@
 #include "acceleration.h"
+#include <time.h>
 #define SampleSize 100 // the sample number in a chirp, suggesting it should be the power of 2
 #define ChirpSize 128  // the chirp number in a frame, suggesting it should be the the power of 2
 #define FrameSize 90   // the frame number
@@ -211,10 +212,17 @@ void printComplex(Complex_t in)
 
 void cpuTiming()
 {
+    double fftTime;
+    // reshape and extension time
+    double preProcessTime;
+    double findMaxTime;
+
     Timer timer;
     double totalBegin = timer.elapsed();
+    // clock_t totalBegin = clock();
 
     char filepath[] = "./fhy_direct.bin";
+    // char filepath[] = "./new_sample.bin";
     int NumDataPerFrame = ChirpSize * SampleSize * numRx * 2;
     int BytePerFrame = NumDataPerFrame * sizeof(short);
     FILE *fp = fopen(filepath, "rb");
@@ -250,11 +258,6 @@ void cpuTiming()
     Complex_t *fftRes = (Complex_t *)malloc(nextPow2(ChirpSize * SampleSize) * sizeof(Complex_t));
     Complex_t *fftInput = (Complex_t *)malloc(extendSize * sizeof(Complex_t));
 
-    double baseFrameTime = timer.elapsed() - totalBegin;
-
-    double fftTime;
-    double preProcessTime;
-    double findMaxTime;
     while ((size = (int)fread(inputData, sizeof(short), NumDataPerFrame, fp)) > 0)
     {
 
@@ -270,6 +273,7 @@ void cpuTiming()
         ReshapeComplex_t(inputData, frameDataReshaped, size);
 
         memmove(frameDataRx0, frameDataReshaped, ChirpSize * SampleSize * sizeof(Complex_t));
+
         // extend the frame data
         for (int i = 0; i < SampleSize * ChirpSize; i++)
         {
@@ -280,33 +284,44 @@ void cpuTiming()
             fftInput[i].real = 0;
             fftInput[i].imag = 0;
         }
-        preProcessTime += timer.elapsed() - preProcessBegin;
+
+        // printf("CPU substraction\n");
+        // for (int i = 0; i < 10; i++)
+        // {
+        //     printf("frameDataReshaped[%d] real: %.5f  img: %.5f\n", i, frameDataReshaped[i].real, frameDataReshaped[i].imag);
+        // }
+        // printf("CPU fft input\n");
+        // for (int i = 0; i < 10; i++)
+        // {
+        //     printf("fftInput[%d] real: %.5f  img: %.5f\n", i, fftInput[i].real, fftInput[i].imag);
+        // }
+
+        double preProcessEnd = timer.elapsed();
+
+        preProcessTime += (preProcessEnd - preProcessBegin);
+
         double fftBegin = timer.elapsed();
         memmove(fftRes, fftInput, extendSize * sizeof(Complex_t));
         butterfly_fft(extendSize, fftRes);
-        fftTime += timer.elapsed() - fftBegin;
+        double fftEnd = timer.elapsed();
+        fftTime += (fftEnd - fftBegin);
 
         // for(int i = extendSize * 2 / 3; i < extendSize * 2 / 3 + 10; i++){
         //     printf("CPU fftRes[%d] real %.5f imag %.5f \n", i,fftRes[i].real, fftRes[i].imag);
         // }
+
         double findMaxBegin = timer.elapsed();
         double Fs_extend = Fs * extendSize / (ChirpSize * SampleSize);
         int maxDisIdx = FindAbsMax(fftRes, floor(0.4 * extendSize)) * (ChirpSize * SampleSize) / extendSize;
         double maxDis = c * (((double)maxDisIdx / extendSize) * Fs_extend) / (2 * mu);
+        double findMaxEnd = timer.elapsed();
 
-        findMaxTime += timer.elapsed() - findMaxBegin;
+        findMaxTime += (findMaxEnd - findMaxBegin);
 
-        // printf("Finding maxDisIdx %d maxDis %.5f\n", maxDisIdx, maxDis);
         cpuRes[numFrameRead] = maxDis;
-    }
-    double totalEnd = timer.elapsed();
+        printf("cpuRes[%d] maxDis %.5f\n", numFrameRead, maxDis);
 
-    printf("CPU %.5f ms\n", totalEnd - totalBegin);
-    printf("BaseFrame time %.5f ms\n", baseFrameTime);
-    printf("preProcessTime %.5f\n", preProcessTime);
-    printf("FFT time %.5f ms\n", fftTime);
-    printf("findMaxTime %.5f ms\n", findMaxTime);
-    printf("BaseFrame time %.5f ms\n", baseFrameTime);
+    }
 
     free(fftRes);
     free(fftInput);
@@ -317,13 +332,26 @@ void cpuTiming()
     free(baseFrameRx0);
     free(inputData);
     fclose(fp);
+
+    double totalEnd = timer.elapsed();
+    // clock_t totalEnd = clock();
+    double totalTime = totalEnd - totalBegin;
+
+    // double totalTime = (double)(totalEnd - totalBegin) / CLOCKS_PER_SEC ;
+
+    printf("Total Time for %d frames %.5f ms averaged %.5f FPS \n", numFrameRead, 1000.0 * totalTime, (double)numFrameRead / totalTime);
+    printf("Total FFT time %.5f ms averaged %.5f ms/frame \n", 1000.0 * fftTime, 1000.0 * fftTime / (double)numFrameRead);
+    printf("Total Reshape + Extension time %.5f ms averaged %.5f / frame\n", 1000.0 * preProcessTime, 1000.0 * preProcessTime / (double)numFrameRead);
+    printf("Total findMax time %.5f ms averaged %.5f ms/frame\n", 1000.0 * findMaxTime, 1000.0 * findMaxTime / (double)numFrameRead);
 }
 
 void cudaTiming()
 {
     Timer timer;
+    double cudaTime = timer.elapsed();
 
     char filepath[] = "./fhy_direct.bin";
+    // char filepath[] = "./new_sample.bin";
     int NumDataPerFrame = ChirpSize * SampleSize * numRx * 2;
     int BytePerFrame = NumDataPerFrame * sizeof(short);
     FILE *fp = fopen(filepath, "rb");
@@ -355,16 +383,14 @@ void cudaTiming()
 
     Complex_t *frameDataReshaped = (Complex_t *)malloc(size * sizeof(Complex_t) / 2);
     Complex_t *frameDataRx0 = (Complex_t *)malloc(extendSize * sizeof(Complex_t));
+    double fftTime = 0, preProcessTime = 0, findMaxTime = 0, totalTime = 0;
 
-    double cudaTime = timer.elapsed();
     while ((size = (int)fread(inputData, sizeof(short), NumDataPerFrame, fp)) > 0)
     {
         numFrameRead++;
-        cudaRes[numFrameRead] = cudaProcessing(inputData, baseFrameRx0, size);
+        cudaRes[numFrameRead] = cudaProcessing(inputData, baseFrameRx0, size, &fftTime, &preProcessTime, &findMaxTime, &totalTime);
+        printf("cudaRes[%d] %.6f\n", numFrameRead, cudaRes[numFrameRead]);
     }
-    cudaTime = timer.elapsed() - cudaTime;
-
-    printf("cudaTime %.5f ms\n", cudaTime);
 
     free(frameDataReshaped);
     free(frameDataRx0);
@@ -373,6 +399,14 @@ void cudaTiming()
     free(inputData);
 
     fclose(fp);
+
+    cudaTime = timer.elapsed() - cudaTime;
+
+    printf("cuda totalTime %.5f ms average %.5f ms/frame cudaFPS %.5f FPS\n", 1000.0 * cudaTime, (1000.0 * cudaTime) / (double)numFrameRead, 1 / cudaTime * numFrameRead);
+    printf("cuda FFT time %.5f ms average %.5f ms/frame\n", 1000.0 * fftTime, 1000.0 * fftTime / (double)numFrameRead);
+    printf("cuda preProcesstime time %.5f ms average %.5f ms/frame\n", 1000.0 * preProcessTime, 1000.0 * preProcessTime / (double)numFrameRead);
+    printf("cuda findMaxTime time %.5f ms average %.5f ms/frame\n", 1000.0 * findMaxTime, 1000.0 * findMaxTime / (double)numFrameRead);
+    printf("cuda inner time %.5f ms average %.5f ms/frame cuda inner FPS %.5f FPS\n", 1000.0 * totalTime, 1000.0 * totalTime / (double)numFrameRead, 1 / totalTime * numFrameRead);
 }
 
 int main()
@@ -398,7 +432,33 @@ int main()
     //     }
     //     // printf("frame[%d] Ref Res %.6f CUDA res %.6f\n", i, cpuRes[i], cudaRes[i]);
     // }
-    cpuTiming();
+    // printf("CPU Timing\n");
+    // cpuTiming();
+    printf("CUDA Timing\n");
     cudaTiming();
+
+    // char filepath[] = "./new_sample.bin";
+    // FILE *fp;
+    // int size;
+    // if ((fp = fopen(filepath, "rb+")) == NULL)
+    // {
+    //     printf("\nCan not open the path: %s \n", filepath);
+    //     return -1;
+    // }
+    // else
+    // {
+    //     fseek(fp, 0, SEEK_END);
+    //     size = ftell(fp);
+    // }
+    // short *buf = (short *)malloc(sizeof(short) * size);
+    // fread(buf, sizeof(short), size, fp);
+    // fclose(fp);
+
+    // fp = fopen("./new_sample.bin","ab+");
+    // fwrite(buf, sizeof(short), size, fp);
+    // fwrite(buf, sizeof(short), size, fp);
+
+    // fclose(fp);
+
     return 0;
 }
