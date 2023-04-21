@@ -7,7 +7,7 @@ NVCCFLAGS= -m64 --gpu-architecture compute_61 -ccbin /usr/bin/gcc -lineinfo
 
 # List of source files
 BASE_SRC = cudaBenchMarking.cpp acceleration.cu
-STREAM_SRC = stream.cu
+STREAM_SRC = main.cu stream.cu
 
 # List of header files
 HEADERS = acceleration.h
@@ -19,7 +19,7 @@ EXECUTABLE = base stream
 
 # Targets
 OBJS_BASE=$(OBJDIR)/cudaBenchMarking.o $(OBJDIR)/acceleration.o 
-OBJS_STREAM = $(OBJDIR)/stream.o
+OBJS_STREAM = $(OBJDIR)/stream.o $(OBJDIR)/main.o
 all: $(EXECUTABLE)
 
 default: $(EXECUTABLE)
