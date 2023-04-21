@@ -889,10 +889,11 @@ int Kernel_radarDectection(char *filepath, double *Dis, double *Agl, double *Spd
         for(int smp = 0; smp < SampleSize_extend; smp++){
             // do the 1dfft for the data in rx0
             Complex *smp_ptr = Data_2dfft_tp + smp * ChirpSize_extend;
-            // do fft for the data in Data_frm_rx0, the result is stored in Data_2dfft
-            // a new version of FFTextend_OMP but divide N here:
+    
             FFTextend_OMP(smp_ptr, smp_ptr, SampleSize_extend);
+            // fft shift, exchange the data before mid and after mid
             FFTshift(smp_ptr, ChirpSize_extend);
+            // set the mid to 0
             *(smp_ptr + chp_mid) = GetComplex(0, 0);
         }
 
