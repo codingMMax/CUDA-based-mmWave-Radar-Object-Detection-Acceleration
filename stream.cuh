@@ -35,7 +35,6 @@ inline void cudaAssert(cudaError_t code, const char *file, int line, bool abort 
 #define ChirpSize 128  // the chirp number in a frame, suggesting it should be the the power of 2
 #define FrameSize 90   // the frame number
 #define RxSize 4       // the rx size, which is usually 4
-#define c 3.0e8        // the speed of light
 #define numTx 1
 #define numRx 4 // the rx size, which is usually 4
 #define THREADS_PER_BLOCK 512
@@ -43,6 +42,10 @@ inline void cudaAssert(cudaError_t code, const char *file, int line, bool abort 
 #define fs 2.0e6         // sampling frequency
 #define lightSpeed 3.0e08
 #define mu 5.987e12 // FM slope
+#define f0 77e9
+#define lamda lightSpeed / f0
+#define d = 0.5 * lamda
+
 
 class Timer
 {
@@ -62,7 +65,7 @@ private:
 
 struct Complex_t
 {
-    double real, imag, mol;
+    double real, imag;
 };
 
 
@@ -70,7 +73,7 @@ struct Complex_t
 void preProcessing_host(short *OriginalArray, Complex_t *Reshape, int size);
 void printComplexCUDA(Complex_t *input, int start, int end, int size);
 void printShortCUDA(short *input, int start, int end, int size);
-int cudaFindAbsMax(Complex_t *ptr, int size);
+__device__ int cudaFindAbsMax(Complex_t *ptr, int size);
 __device__ static Complex_t cudaComplexSub(Complex_t a, Complex_t b);
 __device__ static Complex_t cudaComplexAdd(Complex_t a, Complex_t b);
 __device__ static Complex_t cudaComplexMul(Complex_t a, Complex_t b);
@@ -101,7 +104,7 @@ __global__ void complexReshape_kernel(Complex_t *destArray, Complex_t *srcArray,
  * @param: rx0_extended_size: extended rx0 size = nextPow2(SampleSize * ChirpSize)
  *
  */
-__global__ void rx0Extension_kernel(Complex_t *baseFrame, Complex_t *extendedBuffer, Complex_t *reshaped_frame, int oldSize, int extendedSize);
+__global__ void rxExtension_kernel(Complex_t *baseFrame, Complex_t *extendedBuffer, Complex_t *reshaped_frame, int oldSize, int extendedSize);
 /**
  * compute the reverse decimal number of input 'num' for given 'bits'
  */
@@ -114,6 +117,13 @@ __device__ int bitsReverse(int num, int bits);
  */
 __global__ void bitReverseSwap_kernel(Complex_t *input, int size, int pow);
 /**
+ * Device function perform bit reverse and element swap for later fft
+ * This function is doing the same as the kernel function, but is designed
+ * to be called within a kernel before later fft.
+*/
+__device__ void bitReverseSwap_func(Complex_t *input, int size, int pow);
+
+/**
  * kernel function perform butterfly computation fft for input data.
  * @param: input: 'data' complex input array with length 'size'.
  * @param: input: 'size' array length.
@@ -121,6 +131,27 @@ __global__ void bitReverseSwap_kernel(Complex_t *input, int size, int pow);
  * @param: input: 'pow' power of the input length = log2(size).
  */
 __global__ void butterflyFFT_kernel(Complex_t *data, int size, int stage, int pow);
+
+/**
+ * device function perform butterfly computation fft for input data.
+ * This function is the same as butterflyFFT_kernel function, but
+ * it this is designed to be called within a kernel function for better
+ * overall parallelsim.
+*/
+__device__ void butterflyFFT_func(Complex_t *data, int size, int stage, int pow);
+
+/**
+ * Kernel function that initialize the angle weights in 3 stages.
+ * Stage1: initialize the 'angle_fft_buffer[i]' = 'reshaped_frame[i] - base_frame[i]'
+ * Stage2: apply FFT for the angle_fft_buffer
+ * Stage3: assign weight[1,2,3] = fft_res[maxAngleIdx] / extended_size
+*/
+__global__ void angleWeightInit_kernel(Complex_t *weights, Complex_t *rx0_fft_input_device, Complex_t *rx_fft_res, int maxAngleIdx, int size);
+
+__global__ void angleMatrixInit_kernel(Complex_t *matrix,  int size);
+
+__global__ void angleMatrixMul_kernel(Complex_t *angle_matrix, Complex_t *angle_weight, Complex_t *res, int num_angle_sample);
+
 /**
  * Wrapper function to luanch cuda kernels
  * @param: Input: input_host: data read from .bin file in short format, with length 'size' = 'SampleSize * ChirpSize * numRx * 2'.
@@ -133,5 +164,5 @@ __global__ void butterflyFFT_kernel(Complex_t *data, int size, int stage, int po
  * @return: double format calculated distance of moving object
  *
  */
-double cudaDistanceDetection(double& fftTime, double& preProcessingTime, double& findMaxTime, double& totalTime,short *input_host, Complex_t *base_frame_rx0_device, Complex_t *frame_buffer_device, Complex_t *frame_reshaped_device, Complex_t *frame_reshaped_rx0_device, int size, int rx0_extended_size);
+double cudaAcceleration(double& angleTime, double& distTime ,double &fftTime, double &preProcessingTime, double &findMaxTime, double &totalTime, short *input_host, Complex_t *base_frame_device, Complex_t *frame_buffer_device, Complex_t *frame_reshaped_device, Complex_t *frame_reshaped_rx0_device, int size, int rx0_extended_size);
 
