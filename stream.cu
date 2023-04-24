@@ -1,5 +1,15 @@
 #include "stream.cuh"
-
+static inline int nextPow2(int n)
+{
+    n--;
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    n++;
+    return n;
+}
 void preProcessing_host(short *OriginalArray, Complex_t *Reshape, int size)
 {
     int i, j, k;
@@ -460,20 +470,102 @@ __global__ void angleMatrixMul_kernel(Complex_t *angle_matrix, Complex_t *angle_
 }
 
 /**
+ * kernel function for rx0 data padding
+ * @param rx0_extended: extended rx0 data with length 'extended_sample_size * ChirpSize'.
+ * @param rx0_non_extended: non-extended rx0 data with length 'ChirpSize * SampleSize'.
+ * @param base_frame_rx0: rx0 data of base frame with length 'ChirpSize * SampleSize'.
+ * @param extended_size: toal length of extended size = 'extended_sample_size * ChirpSize'.
+ * @param non_extended_size: total length of non-extended size = 'SampleSize * ChirpSize'.
+ * @param extended_sample_size: lenght of extende sample size = 'nexPow2(SampleSize)'.
+ */
+__global__ void rx0ChirpPadding_kernel(Complex_t *rx0_extended, Complex_t *rx0_non_extended, Complex_t *base_frame_rx0, int extended_size, int non_extended_size, int extended_sample_size)
+{
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    if (idx < extended_size)
+    {
+        int chirpIdx = idx / extended_sample_size;
+        int sampleIdx = idx - chirpIdx * extended_sample_size;
+        if (sampleIdx < SampleSize)
+        {
+            // this sample is within the non-extended region
+            Complex_t tmp;
+            int non_extended_idx = chirpIdx * SampleSize + sampleIdx;
+            tmp = cudaComplexSub(rx0_non_extended[non_extended_idx], base_frame_rx0[non_extended_idx]);
+            rx0_extended[idx] = tmp;
+        }
+        else
+        {
+            rx0_extended[idx].real = 0;
+            rx0_extended[idx].imag = 0;
+        }
+    }
+}
+/**
+ * Kernel function to transpose the input matrix
+ * @param matrix: input matrix with dim1 x dim2
+ * @param res: output matrix with dim2 x dim1
+ * @param dim1: dimension 1 of input matrix
+ * @param dim2: dimension 2 of input matrix
+ */
+__global__ void matrixTranspose_kenel(Complex_t *matrix, Complex_t *res, int dim1, int dim2)
+{
+    int srcIdx = blockDim.x * blockIdx.x + threadIdx.x;
+    // load the matrix value into shared block
+    if (srcIdx < dim1 * dim2)
+    {
+        // coordinates transform
+        int dim1Idx = srcIdx / dim2;
+        int dim2Idx = srcIdx - dim1Idx * dim2;
+        int destIdx = dim2Idx * dim1 + dim1Idx;
+        res[destIdx] = matrix[srcIdx];
+    }
+}
+
+/**
+ * kernel function to swap the right and left half fo the input fftRes.
+ * @param fftRes: input array with length 'ChirpSize'.
+ */
+__global__ void fftResSwap_kernel(Complex_t *fftRes)
+{
+    __shared__ Complex_t buffer[ChirpSize];
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    if (idx < ChirpSize)
+    {
+        buffer[idx] = fftRes[idx];
+        __syncthreads();
+        int mid = ChirpSize / 2;
+        if (idx > mid)
+        {
+            fftRes[idx] = buffer[idx - mid];
+        }
+        else if (idx < mid)
+        {
+            fftRes[idx] = buffer[idx + mid];
+        }
+        else
+        {
+            fftRes[idx].real = 0;
+            fftRes[idx].imag = 0;
+        }
+    }
+}
+
+/**
  * Wrapper function to luanch cuda kernels
  * @param input_host: data read from .bin file in short format, with length 'size' = 'SampleSize * ChirpSize * numRx * 2'.
  * @param base_frame_rx0_device: allocated base frame rx0 data space in device side, with length 'SampleSize * ChirpSize'.
  * @param frame_buffer_device: allocated frame reshape buffer sapce in device side, with length 'size'.
  * @param frame_reshaped_device: allocated reshaped frame data space in device side, with length 'size/2'.
- * @param frame_reshaped_rx0_device: allocated reshaped frame rx0 data space in device side, with length 'rx0_extended_size'.
  * @param size: int type indicates the total length of 'input_host'.
  * @param rx0_extended_size: int type indicates the length of 'rx0_extended_size'.
  * @return: double format calculated distance of moving object
  *
  */
-// double cudaAcceleration(double &fftTime, double &preProcessingTime, double &findMaxTime, double &totalTime, short *input_host, Complex_t *base_frame_rx0_device, Complex_t *frame_buffer_device, Complex_t *frame_reshaped_device, Complex_t *frame_reshaped_rx0_device, int size, int rx0_extended_size)
-double cudaAcceleration(double &angleTime, double &distTime, double &fftTime, double &preProcessingTime, double &findMaxTime, double &totalTime, short *input_host, Complex_t *base_frame_device, Complex_t *frame_buffer_device, Complex_t *frame_reshaped_device, Complex_t *frame_reshaped_rx0_device, int size, int rx0_extended_size)
+void cudaAcceleration(double &speed, double &angle, double &distance, double &speedTime, double &angleTime, double &distTime, double &fftTime, double &preProcessingTime, double &findMaxTime, double &totalTime, short *input_host, Complex_t *base_frame_device, Complex_t *frame_buffer_device, Complex_t *frame_reshaped_device, int size, int rx0_extended_size)
 {
+    /**
+     * Distance detection
+     */
     Timer timer;
     double start = timer.elapsed();
     int num_blocks_preProcessing = (THREADS_PER_BLOCK + size - 1) / THREADS_PER_BLOCK;
@@ -481,8 +573,7 @@ double cudaAcceleration(double &angleTime, double &distTime, double &fftTime, do
     short *input_device;
     cudaCheckError(cudaMalloc((void **)&input_device, sizeof(short) * size));
     cudaCheckError(cudaMemcpy(input_device, input_host, sizeof(short) * size, cudaMemcpyHostToDevice));
-    Complex_t *extended_rx0;
-    cudaCheckError(cudaMalloc((void **)&extended_rx0, sizeof(Complex_t) * rx0_extended_size));
+
     Complex_t *rx0_fft_input_device;
     cudaCheckError(cudaMalloc((void **)&rx0_fft_input_device, sizeof(Complex_t) * rx0_extended_size));
     Complex_t *preProcessing_buffer;
@@ -510,7 +601,7 @@ double cudaAcceleration(double &angleTime, double &distTime, double &fftTime, do
     num_blocks_preProcessing = (THREADS_PER_BLOCK + rx0_extended_size - 1) / THREADS_PER_BLOCK;
     rxExtension_kernel<<<num_blocks_preProcessing, THREADS_PER_BLOCK>>>(base_frame_rx0_device, rx0_fft_input_device, frame_reshaped_device, SampleSize * ChirpSize, rx0_extended_size);
     // printf("after reshaped kernel FFT input \n");
-    // printComplexCUDA(rx0_fft_input_device, 100, 110, rx0_extended_size);
+    // printComplexCUDA(rx0_fft_input_device, 90, 110, rx0_extended_size);
 
     double preProcessingEnd = timer.elapsed();
     double fftStart = preProcessingEnd;
@@ -544,6 +635,7 @@ double cudaAcceleration(double &angleTime, double &distTime, double &fftTime, do
     int maxDisIdx = maxIdx * (ChirpSize * SampleSize) / rx0_extended_size;
 
     double maxDis = lightSpeed * (((double)maxDisIdx / rx0_extended_size) * Fs_extend) / (2 * mu);
+    distance = maxDis;
 
     double findMaxEnd = timer.elapsed();
     findMaxTime += findMaxEnd - findMaxStart;
@@ -593,6 +685,7 @@ double cudaAcceleration(double &angleTime, double &distTime, double &fftTime, do
     Complex_t *angle_weights_device;
     cudaCheckError(cudaMalloc((void **)&angle_weights_device, sizeof(Complex_t) * RxSize));
     angleWeightInit_kernel<<<1, RxSize>>>(angle_weights_device, rx0_fft_input_device, rx_fft_input_device, maxAngleIdx, rx0_extended_size);
+
     // printComplexCUDA(angle_weights_device, 0, RxSize, RxSize);
     // above operations are verified
     // Stage4 MMM: Angle Matrix X angle_weights
@@ -612,19 +705,128 @@ double cudaAcceleration(double &angleTime, double &distTime, double &fftTime, do
     angle_matrix_res_host = (Complex_t *)malloc(sizeof(Complex_t) * angle_sample_num);
     angleMatrixMul_kernel<<<num_blocks_angle, THREADS_PER_BLOCK>>>(angle_matrix_device, angle_weights_device, angle_matrix_res_device, angle_sample_num);
     cudaDeviceSynchronize();
+
+    double angleFindMax = timer.elapsed();
     cudaCheckError(cudaMemcpy(angle_matrix_res_host, angle_matrix_res_device, sizeof(Complex_t) * angle_sample_num, cudaMemcpyDeviceToHost));
     maxAngleIdx = findAbsMax(angle_matrix_res_host, angle_sample_num);
+    findMaxTime += (timer.elapsed() - angleFindMax);
     // printComplexCUDA(angle_matrix_res_device, 1100, 1110, angle_sample_num);
     // above operations are verified
     double maxAgl = (maxAngleIdx - 900.0) / 10.0;
-    printf("maxAgl %.9f\n",maxAgl);
-
+    angle = maxAgl;
+    // printf("maxAgl %.9f\n",maxAgl);
     angleTime += (timer.elapsed() - angleBegin);
+
+    /**
+     * Speed Detection
+     * 1. stage1 padding each chirp data in rx0 to be 2^n
+     * 2. stage2 apply fft for each padded chirp of rx0 in chirp dimension
+     * 3. stage3 transpose the transformed fft results
+     * 4. stage4 apply fft in sample dimension and swap the front half and back half
+     */
+
+    // allocate memory sapce for the padding rx0
+    double speedBegin = timer.elapsed();
+
+    Complex_t *rx0_extended_fft_input_device;
+    cudaCheckError(cudaMalloc((void **)&rx0_extended_fft_input_device, sizeof(Complex_t) * rx0_extended_size));
+    int extended_sample_size = nextPow2(SampleSize);
+    int num_blocks_speed = (rx0_extended_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+
+    // stage1 using the frame_reshaped_device used as the ptr to original non-extended rx0 frame data
+    double speedPreProc = timer.elapsed();
+    rx0ChirpPadding_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fft_input_device, frame_reshaped_device, base_frame_rx0_device, rx0_extended_size, SampleSize * ChirpSize, extended_sample_size);
+    cudaDeviceSynchronize();
+    preProcessingTime += (timer.elapsed() - speedPreProc);
+    // above extension is verified
+    // printComplexCUDA(rx0_extended_fft_input_device, 128,138,rx0_extended_size);
+    cnt = 1;
+    pow = 0;
+    while (cnt < extended_sample_size)
+    {
+        cnt <<= 1;
+        pow++;
+    }
+    // stage2 apply fft for each padded chirp of rx0
+    num_blocks_speed = (extended_sample_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+
+    double speedFFTBegin = timer.elapsed();
+
+    for (int i = 0; i < ChirpSize; i++)
+    {
+        Complex_t *chirp_fft_ptr = i * extended_sample_size + rx0_extended_fft_input_device;
+        // bit reverse
+        bitReverseSwap_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(chirp_fft_ptr, extended_sample_size, pow);
+        cudaDeviceSynchronize();
+        for (int stage = 0; stage < pow; stage++)
+        {
+            butterflyFFT_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(chirp_fft_ptr, extended_sample_size, stage + 1, pow);
+            cudaDeviceSynchronize();
+        }
+    }
+
+    fftTime += (timer.elapsed() - speedFFTBegin);
+
+    // above FFT is verified
+    // stage3 transpose the fft res
+    Complex_t *rx0_extended_fftRes_transpose;
+    cudaCheckError(cudaMalloc((void **)&rx0_extended_fftRes_transpose, sizeof(Complex_t) * rx0_extended_size));
+    num_blocks_speed = (extended_sample_size * ChirpSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    matrixTranspose_kenel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fft_input_device, rx0_extended_fftRes_transpose, extended_sample_size, ChirpSize);
+
+    cudaDeviceSynchronize();
+
+    // printf("After transpose\n");
+    // printComplexCUDA(rx0_extended_fftRes_transpose, 0, 10, rx0_extended_size);
+
+    // printComplexCUDA(rx0_extended_fftRes_transpose, 128, 129, rx0_extended_size);
+    // printComplexCUDA(rx0_extended_fftRes_transpose, 256, 257, rx0_extended_size);
+    // above transpose is verified
+
+    // stage4 apply fft for the transposed data
+    // and swap the right and left half
+    num_blocks_speed = (extended_sample_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    speedFFTBegin = timer.elapsed();
+    for (int i = 0; i < extended_sample_size; i++)
+    {
+        Complex_t *chirp_fft_ptr = i * ChirpSize + rx0_extended_fftRes_transpose;
+        // bit reverse
+        bitReverseSwap_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(chirp_fft_ptr, extended_sample_size, pow);
+        cudaDeviceSynchronize();
+        for (int stage = 0; stage < pow; stage++)
+        {
+            butterflyFFT_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(chirp_fft_ptr, ChirpSize, stage + 1, pow);
+            cudaDeviceSynchronize();
+        }
+        num_blocks_speed = (ChirpSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+        fftResSwap_kernel<<<num_blocks_speed, ChirpSize>>>(chirp_fft_ptr);
+        cudaDeviceSynchronize();
+    }
+
+    fftTime += (timer.elapsed() - speedFFTBegin);
+
+    double speedFindMax = timer.elapsed();
+
+    Complex_t *speed_fft_res_host = (Complex_t *)malloc(sizeof(Complex_t) * rx0_extended_size);
+
+    cudaCheckError(cudaMemcpy(speed_fft_res_host, rx0_extended_fftRes_transpose, sizeof(Complex_t) * rx0_extended_size, cudaMemcpyDeviceToHost));
+
+    int maxSpeedIdx = findAbsMax(speed_fft_res_host, ChirpSize * SampleSize) % ChirpSize;
+
+    findMaxTime += (timer.elapsed() - speedFindMax);
+
+    double fr = 1e6 / 64;
+    double LAMDA = 3.0e08 / 77e9;
+    double maxSpeed = ((maxSpeedIdx)*fr / ChirpSize - fr / 2) * LAMDA / 2;
+    speed = maxSpeed;
+    speedTime += (timer.elapsed() - speedBegin);
+    // printf("maxSpeed %.5f m/s\n", maxSpeed);
 
     totalTime += (timer.elapsed() - start);
 
     free(rx0_fft_res_host);
     free(angle_matrix_res_host);
+    free(speed_fft_res_host);
 
     cudaCheckError(cudaFree(rx_fft_input_device));
     cudaCheckError(cudaFree(base_frame_rx0_device));
@@ -632,9 +834,9 @@ double cudaAcceleration(double &angleTime, double &distTime, double &fftTime, do
     cudaCheckError(cudaFree(angle_matrix_device));
     cudaCheckError(cudaFree(angle_matrix_res_device));
     cudaCheckError(cudaFree(input_device));
-    cudaCheckError(cudaFree(extended_rx0));
-    cudaCheckError(cudaFree(rx0_fft_input_device));
-    cudaCheckError(cudaFree(preProcessing_buffer));
 
-    return maxDis;
+    cudaCheckError(cudaFree(rx0_extended_fft_input_device));
+    cudaCheckError(cudaFree(rx0_fft_input_device));
+    cudaCheckError(cudaFree(rx0_extended_fftRes_transpose));
+    cudaCheckError(cudaFree(preProcessing_buffer));
 }

@@ -46,7 +46,6 @@ inline void cudaAssert(cudaError_t code, const char *file, int line, bool abort 
 #define lamda lightSpeed / f0
 #define d = 0.5 * lamda
 
-
 class Timer
 {
 public:
@@ -67,8 +66,6 @@ struct Complex_t
 {
     double real, imag;
 };
-
-
 
 void preProcessing_host(short *OriginalArray, Complex_t *Reshape, int size);
 void printComplexCUDA(Complex_t *input, int start, int end, int size);
@@ -120,7 +117,7 @@ __global__ void bitReverseSwap_kernel(Complex_t *input, int size, int pow);
  * Device function perform bit reverse and element swap for later fft
  * This function is doing the same as the kernel function, but is designed
  * to be called within a kernel before later fft.
-*/
+ */
 __device__ void bitReverseSwap_func(Complex_t *input, int size, int pow);
 
 /**
@@ -137,7 +134,7 @@ __global__ void butterflyFFT_kernel(Complex_t *data, int size, int stage, int po
  * This function is the same as butterflyFFT_kernel function, but
  * it this is designed to be called within a kernel function for better
  * overall parallelsim.
-*/
+ */
 __device__ void butterflyFFT_func(Complex_t *data, int size, int stage, int pow);
 
 /**
@@ -145,12 +142,18 @@ __device__ void butterflyFFT_func(Complex_t *data, int size, int stage, int pow)
  * Stage1: initialize the 'angle_fft_buffer[i]' = 'reshaped_frame[i] - base_frame[i]'
  * Stage2: apply FFT for the angle_fft_buffer
  * Stage3: assign weight[1,2,3] = fft_res[maxAngleIdx] / extended_size
-*/
+ */
 __global__ void angleWeightInit_kernel(Complex_t *weights, Complex_t *rx0_fft_input_device, Complex_t *rx_fft_res, int maxAngleIdx, int size);
 
-__global__ void angleMatrixInit_kernel(Complex_t *matrix,  int size);
+__global__ void angleMatrixInit_kernel(Complex_t *matrix, int size);
 
 __global__ void angleMatrixMul_kernel(Complex_t *angle_matrix, Complex_t *angle_weight, Complex_t *res, int num_angle_sample);
+
+__global__ void rx0ChirpPadding_kernel(Complex_t *rx0_extended, Complex_t *rx0_non_extended, Complex_t *base_frame_rx0, int extended_size, int non_extended_size, int extended_sample_size);
+
+__global__ void matrixTranspose_kenel(Complex_t *matrix, Complex_t *res, int dim1, int dim2);
+
+__global__ void fftResSwap_kernel(Complex_t *fftRes, int size);
 
 /**
  * Wrapper function to luanch cuda kernels
@@ -158,11 +161,9 @@ __global__ void angleMatrixMul_kernel(Complex_t *angle_matrix, Complex_t *angle_
  * @param: Input: base_frame_rx0_device: allocated base frame rx0 data space in device side, with length 'SampleSize * ChirpSize'.
  * @param: Input: frame_buffer_device: allocated frame reshape buffer sapce in device side, with length 'size'.
  * @param: Input: frame_reshaped_device: allocated reshaped frame data space in device side, with length 'size/2'.
- * @param: Input: frame_reshaped_rx0_device: allocated reshaped frame rx0 data space in device side, with length 'rx0_extended_size'.
  * @param: Input: size: int type indicates the total length of 'input_host'.
  * @param: Input: rx0_extended_size: int type indicates the length of 'rx0_extended_size'.
  * @return: double format calculated distance of moving object
  *
  */
-double cudaAcceleration(double& angleTime, double& distTime ,double &fftTime, double &preProcessingTime, double &findMaxTime, double &totalTime, short *input_host, Complex_t *base_frame_device, Complex_t *frame_buffer_device, Complex_t *frame_reshaped_device, Complex_t *frame_reshaped_rx0_device, int size, int rx0_extended_size);
-
+void cudaAcceleration(double &speed, double &angle, double &distance, double &speedTime, double &angleTime, double &distTime, double &fftTime, double &preProcessingTime, double &findMaxTime, double &totalTime, short *input_host, Complex_t *base_frame_device, Complex_t *frame_buffer_device, Complex_t *frame_reshaped_device, int size, int rx0_extended_size);
