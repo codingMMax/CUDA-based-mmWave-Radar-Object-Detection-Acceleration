@@ -761,10 +761,11 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
         for (int stage = 0; stage < pow; stage++)
         {
             butterflyFFT_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(chirp_fft_ptr, extended_sample_size, stage + 1, pow);
-            cudaDeviceSynchronize();
         }
+        cudaDeviceSynchronize();
     }
-
+    double speedMarker = timer.elapsed() - speedFFTBegin;
+    // printf("speed first fft time %.3f ms\n", 1000 * speedMarker * 89);
     fftTime += (timer.elapsed() - speedFFTBegin);
 
     // above FFT is verified
@@ -775,14 +776,6 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     matrixTranspose_kenel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fft_input_device, rx0_extended_fftRes_transpose, extended_sample_size, ChirpSize);
 
     cudaDeviceSynchronize();
-
-    // printf("After transpose\n");
-    // printComplexCUDA(rx0_extended_fftRes_transpose, 0, 10, rx0_extended_size);
-
-    // printComplexCUDA(rx0_extended_fftRes_transpose, 128, 129, rx0_extended_size);
-    // printComplexCUDA(rx0_extended_fftRes_transpose, 256, 257, rx0_extended_size);
-    // above transpose is verified
-
     // stage4 apply fft for the transposed data
     // and swap the right and left half
     num_blocks_speed = (extended_sample_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
@@ -802,14 +795,17 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
         fftResSwap_kernel<<<num_blocks_speed, ChirpSize>>>(chirp_fft_ptr);
         cudaDeviceSynchronize();
     }
+    
+    speedMarker = timer.elapsed() - speedFFTBegin;
+    // printf("speed second fft time %.3f ms\n", 1000 * speedMarker * 89);
 
     fftTime += (timer.elapsed() - speedFFTBegin);
-
-    double speedFindMax = timer.elapsed();
 
     Complex_t *speed_fft_res_host = (Complex_t *)malloc(sizeof(Complex_t) * rx0_extended_size);
 
     cudaCheckError(cudaMemcpy(speed_fft_res_host, rx0_extended_fftRes_transpose, sizeof(Complex_t) * rx0_extended_size, cudaMemcpyDeviceToHost));
+
+    double speedFindMax = timer.elapsed();
 
     int maxSpeedIdx = findAbsMax(speed_fft_res_host, ChirpSize * SampleSize) % ChirpSize;
 
@@ -837,6 +833,7 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
 
     cudaCheckError(cudaFree(rx0_extended_fft_input_device));
     cudaCheckError(cudaFree(rx0_fft_input_device));
+
     cudaCheckError(cudaFree(rx0_extended_fftRes_transpose));
     cudaCheckError(cudaFree(preProcessing_buffer));
 }

@@ -67,7 +67,6 @@ int main(int argc, char *argv[])
     cudaCheckError(cudaMemcpy(base_frame_device, base_frame_reshaped,size * sizeof(Complex_t) / 2, cudaMemcpyHostToDevice));
 
     Timer timer;
-    double start = timer.elapsed();
     double fftTime = 0, speedTime = 0, preProcessingTime = 0, findMaxTime = 0, totalTime = 0, angleTime=0, distTime = 0;
     double distance, speed, angle;
     while ((size = (int)fread(read_data, sizeof(short), data_per_frame, fp)) > 0)
@@ -79,17 +78,15 @@ int main(int argc, char *argv[])
         cudaAngle[frameCnt] = angle;
         cudaSpeed[frameCnt] = speed;
 
-        printf("cudaDist[%d] %.6f m\n", frameCnt, cudaDist[frameCnt]);
-        printf("cudaAngle[%d] %.6f degree\n", frameCnt, cudaAngle[frameCnt]);
-        printf("cudaSpeed[%d] %.6f m/s\n", frameCnt, cudaSpeed[frameCnt]);
+        // printf("cudaDist[%d] %.6f m\n", frameCnt, cudaDist[frameCnt]);
+        // printf("cudaAngle[%d] %.6f degree\n", frameCnt, cudaAngle[frameCnt]);
+        // printf("cudaSpeed[%d] %.6f m/s\n", frameCnt, cudaSpeed[frameCnt]);
         
         
         
         frameCnt++;
     }
 
-    double duration = (timer.elapsed() - start);
-    // printf("CUDA Stream outer total time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * duration, 1000.0 *duration / frameCnt ,frameCnt / duration);
     printf("CUDA Stream inner total time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * totalTime, 1000.0 *totalTime / frameCnt,frameCnt / totalTime);
     printf("CUDA Stream total fft time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * fftTime, 1000.0 * fftTime / frameCnt ,frameCnt / fftTime);
     printf("CUDA Stream total preProcessing time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * preProcessingTime, 1000.0 *preProcessingTime / frameCnt ,frameCnt / preProcessingTime);
