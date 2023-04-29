@@ -74,6 +74,8 @@ int main(int argc, char *argv[])
 
         // cudaDist[frameCnt] = cudaAcceleration(fftTime, preProcessingTime, findMaxTime, totalTime, read_data, base_frame_rx0_device, frame_buffer_device, frame_reshaped_device, size, rx0_extended_size);
         cudaAcceleration(speed,angle,distance,speedTime ,angleTime, distTime,fftTime, preProcessingTime, findMaxTime, totalTime, read_data, base_frame_device, frame_buffer_device, frame_reshaped_device, size, rx0_extended_size);
+        
+        
         cudaDist[frameCnt] = distance;
         cudaAngle[frameCnt] = angle;
         cudaSpeed[frameCnt] = speed;

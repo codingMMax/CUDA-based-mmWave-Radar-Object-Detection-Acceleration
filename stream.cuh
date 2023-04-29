@@ -113,12 +113,6 @@ __device__ int bitsReverse(int num, int bits);
  * @param: input: 'pow'  power of the input size = log2(size).
  */
 __global__ void bitReverseSwap_kernel(Complex_t *input, int size, int pow);
-/**
- * Device function perform bit reverse and element swap for later fft
- * This function is doing the same as the kernel function, but is designed
- * to be called within a kernel before later fft.
- */
-__device__ void bitReverseSwap_func(Complex_t *input, int size, int pow);
 
 /**
  * kernel function perform butterfly computation fft for input data.
@@ -129,13 +123,6 @@ __device__ void bitReverseSwap_func(Complex_t *input, int size, int pow);
  */
 __global__ void butterflyFFT_kernel(Complex_t *data, int size, int stage, int pow);
 
-/**
- * device function perform butterfly computation fft for input data.
- * This function is the same as butterflyFFT_kernel function, but
- * it this is designed to be called within a kernel function for better
- * overall parallelsim.
- */
-__device__ void butterflyFFT_func(Complex_t *data, int size, int stage, int pow);
 
 /**
  * Kernel function that initialize the angle weights in 3 stages.
@@ -144,16 +131,72 @@ __device__ void butterflyFFT_func(Complex_t *data, int size, int stage, int pow)
  * Stage3: assign weight[1,2,3] = fft_res[maxAngleIdx] / extended_size
  */
 __global__ void angleWeightInit_kernel(Complex_t *weights, Complex_t *rx0_fft_input_device, Complex_t *rx_fft_res, int maxAngleIdx, int size);
-
+/**
+ * Kernel function to initialize the angle matrix
+ * @param matrix: input matrix with dimension: RxSize * AngleSampleNum = 'size'.
+ * row = RxSize
+ * Col = AngleSampleNum
+ */
 __global__ void angleMatrixInit_kernel(Complex_t *matrix, int size);
-
+/**
+ * angle matrix angle weights multiplication kernel
+ * @param angle_matrix input matrix with dim: RxSize * num_angle_sample
+ * @param angle_weight input matrix with dim: 1 * RxSize
+ * @param res output matrix with dim: 1 * num_angle_sample
+ */
 __global__ void angleMatrixMul_kernel(Complex_t *angle_matrix, Complex_t *angle_weight, Complex_t *res, int num_angle_sample);
-
+/**
+ * kernel function for rx0 data padding
+ * @param rx0_extended: extended rx0 data with length 'extended_sample_size * ChirpSize'.
+ * @param rx0_non_extended: non-extended rx0 data with length 'ChirpSize * SampleSize'.
+ * @param base_frame_rx0: rx0 data of base frame with length 'ChirpSize * SampleSize'.
+ * @param extended_size: toal length of extended size = 'extended_sample_size * ChirpSize'.
+ * @param non_extended_size: total length of non-extended size = 'SampleSize * ChirpSize'.
+ * @param extended_sample_size: lenght of extende sample size = 'nexPow2(SampleSize)'.
+ */
 __global__ void rx0ChirpPadding_kernel(Complex_t *rx0_extended, Complex_t *rx0_non_extended, Complex_t *base_frame_rx0, int extended_size, int non_extended_size, int extended_sample_size);
-
+/**
+ * Kernel function to transpose the input matrix
+ * @param matrix: input matrix with dim1 x dim2
+ * @param res: output matrix with dim2 x dim1
+ * @param dim1: dimension 1 of input matrix
+ * @param dim2: dimension 2 of input matrix
+ */
 __global__ void matrixTranspose_kenel(Complex_t *matrix, Complex_t *res, int dim1, int dim2);
-
+/**
+ * kernel function to swap the right and left half fo the input fftRes.
+ * @param fftRes: input array with length 'ChirpSize'.
+ */
 __global__ void fftResSwap_kernel(Complex_t *fftRes, int size);
+
+/**
+ * Kernel function to perform fft for the input sequence in chunk.
+ * 
+ * @param srcData: input complete sequence that need to be sliced into chunk
+ * @param chunk_size: chunk size to perform
+ * @param size: input complete size 
+ * @param stage: current stage of fft input
+ * @param pow: chunk_size = 2 ^ pow
+*/
+__global__ void butterflyChunkFFT_kernel(Complex_t* srcData, int chunk_size, int size, int stage, int pow);
+
+/**
+ * Kernel function to perform swap for the fft res in chunk.
+ * @param srcData: input complete data with length 'size'.
+ * @param size: total size of input data
+ * @param chunk_size: chunk size 
+*/
+__global__ void fftResSwapChunk_kernel(Complex_t* srcData, int size, int chunk_size);
+
+/**
+ * kernel functiom to perform bit reverse swap for fft prepration
+ * @param srcData: complete input sequence
+ * @param size: length of input sequence
+ * @param chunk_size: chunk size 
+ * @param pow: chunk_size = 2 ^ pow
+*/
+__global__ void bitReverseSwapChunk_kernel(Complex_t *srcData, int size, int chunk_size, int pow);
+
 
 /**
  * Wrapper function to luanch cuda kernels
@@ -163,7 +206,5 @@ __global__ void fftResSwap_kernel(Complex_t *fftRes, int size);
  * @param: Input: frame_reshaped_device: allocated reshaped frame data space in device side, with length 'size/2'.
  * @param: Input: size: int type indicates the total length of 'input_host'.
  * @param: Input: rx0_extended_size: int type indicates the length of 'rx0_extended_size'.
- * @return: double format calculated distance of moving object
- *
  */
 void cudaAcceleration(double &speed, double &angle, double &distance, double &speedTime, double &angleTime, double &distTime, double &fftTime, double &preProcessingTime, double &findMaxTime, double &totalTime, short *input_host, Complex_t *base_frame_device, Complex_t *frame_buffer_device, Complex_t *frame_reshaped_device, int size, int rx0_extended_size);

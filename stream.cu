@@ -1,4 +1,7 @@
 #include "stream.cuh"
+
+#define SHARED_MEM_SIZE sizeof(Complex_t) * ChirpSize
+
 static inline int nextPow2(int n)
 {
     n--;
@@ -83,25 +86,6 @@ void printShortCUDA(short *input, int start, int end, int size)
  * host function that can find the index of the maxium mol
  */
 int findAbsMax(Complex_t *ptr, int size)
-{
-    int maxidx = 0;
-    double maxval = 0;
-    double absval;
-    for (int i = 0; i < size; i++)
-    {
-        Complex_t tmp = ptr[i];
-        absval = sqrt(tmp.real * tmp.real + tmp.imag * tmp.imag);
-
-        if (absval > maxval)
-        {
-            maxval = absval;
-            maxidx = i;
-        }
-    }
-    return maxidx;
-}
-
-__device__ int cudaFindAbsMax(Complex_t *ptr, int size)
 {
     int maxidx = 0;
     double maxval = 0;
@@ -282,27 +266,6 @@ __global__ void bitReverseSwap_kernel(Complex_t *input, int size, int pow)
 }
 
 /**
- * Device function perform bit reverse and element swap for later fft
- * This function is doing the same as the kernel function, but is designed
- * to be called within a kernel before later fft.
- */
-__device__ void bitReverseSwap_func(Complex_t *input, int size, int pow)
-{
-    int idx = blockDim.x * blockIdx.x + threadIdx.x;
-    if (idx < size)
-    {
-        // swap the position
-        int pairIdx = bitsReverse(idx, pow);
-        if (pairIdx > idx)
-        {
-            Complex_t temp = input[idx];
-            input[idx] = input[pairIdx];
-            input[pairIdx] = temp;
-        }
-    }
-}
-
-/**
  * kernel function perform butterfly computation fft for input data.
  * @param input: 'data' complex input array with length 'size'.
  * @param input: 'size' array length.
@@ -310,57 +273,6 @@ __device__ void bitReverseSwap_func(Complex_t *input, int size, int pow)
  * @param input: 'pow' power of the input length = log2(size).
  */
 __global__ void butterflyFFT_kernel(Complex_t *data, int size, int stage, int pow)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    // Perform butterfly operation for each pair of elements at the current stage
-    if (idx < size)
-    {
-        // calculate butterfly coefficient pow_tester
-        int Wn_k = (1 << (pow - stage)) * idx % size;
-        // butterfly coefficient = Wn ^ Wn_k
-        // Wn = e^(-2j*pi/Size)
-        // Wn ^ Wn_k = e ^ (-2j*pi*Wn_k/Size)
-        double theta = -2 * PI * Wn_k / size;
-        Complex_t twiddle = {cos(theta), sin(theta)};
-        // calculate the pair index and multiplication factor
-        int step = 1 << (stage - 1);
-        int group_size = 1 << stage;
-        int lower_bound = (idx / group_size) * group_size;
-        int upper_bound = lower_bound + group_size;
-        int pairIdx = idx + step;
-        Complex_t product, sum;
-        // product = p * a
-
-        // data[idx] = q - p*a
-        if (pairIdx >= upper_bound)
-        {
-            pairIdx = idx - step;
-            product = cudaComplexMul(twiddle, data[idx]);
-            sum = cudaComplexAdd(data[pairIdx], product);
-        }
-        else
-        {
-            product = cudaComplexMul(twiddle, data[pairIdx]);
-            // sum = q + (-1) * p * a
-            sum = cudaComplexAdd(data[idx], product);
-        }
-        // write into the index position
-        // __syncthreads();
-        data[idx] = sum;
-    }
-    else
-    {
-        return;
-    }
-}
-
-/**
- * device function perform butterfly computation fft for input data.
- * This function is the same as butterflyFFT_kernel function, but
- * it this is designed to be called within a kernel function for better
- * overall parallelsim.
- */
-__device__ void butterflyFFT_func(Complex_t *data, int size, int stage, int pow)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     // Perform butterfly operation for each pair of elements at the current stage
@@ -502,21 +414,25 @@ __global__ void rx0ChirpPadding_kernel(Complex_t *rx0_extended, Complex_t *rx0_n
 }
 /**
  * Kernel function to transpose the input matrix
- * @param matrix: input matrix with dim1 x dim2
- * @param res: output matrix with dim2 x dim1
- * @param dim1: dimension 1 of input matrix
- * @param dim2: dimension 2 of input matrix
+ * @param matrix: input matrix with col x row
+ * @param res: output matrix with row x col
+ * @param col: dimension 1 of input matrix
+ * @param row: dimension 2 of input matrix
  */
-__global__ void matrixTranspose_kenel(Complex_t *matrix, Complex_t *res, int dim1, int dim2)
+__global__ void matrixTranspose_kenel(Complex_t *matrix, Complex_t *res, int col, int row)
 {
     int srcIdx = blockDim.x * blockIdx.x + threadIdx.x;
     // load the matrix value into shared block
-    if (srcIdx < dim1 * dim2)
+    if (srcIdx < col * row)
     {
         // coordinates transform
-        int dim1Idx = srcIdx / dim2;
-        int dim2Idx = srcIdx - dim1Idx * dim2;
-        int destIdx = dim2Idx * dim1 + dim1Idx;
+        int colIdx = srcIdx / row;
+        int rowIdx = srcIdx - colIdx * row;
+        int destIdx = rowIdx * col + colIdx;
+
+        // int rowIdx = srcIdx / col;
+        // int colIdx = srcIdx - rowIdx * row;
+        // int destIdx = rowIdx * col + colIdx;
         res[destIdx] = matrix[srcIdx];
     }
 }
@@ -524,6 +440,7 @@ __global__ void matrixTranspose_kenel(Complex_t *matrix, Complex_t *res, int dim
 /**
  * kernel function to swap the right and left half fo the input fftRes.
  * @param fftRes: input array with length 'ChirpSize'.
+ * @param size: input array length.
  */
 __global__ void fftResSwap_kernel(Complex_t *fftRes)
 {
@@ -551,6 +468,124 @@ __global__ void fftResSwap_kernel(Complex_t *fftRes)
 }
 
 /**
+ * Kernel function to perform fft for the input sequence in chunk.
+ *
+ * @param srcData: input complete sequence that need to be sliced into chunk
+ * @param chunk_size: chunk size to perform
+ * @param size: input complete size
+ * @param stage: current stage of fft input
+ * @param pow: chunk_size = 2 ^ pow
+ */
+__global__ void butterflyChunkFFT_kernel(Complex_t *srcData, int chunk_size, int size, int stage, int pow)
+{
+    int tid = blockDim.x * blockIdx.x + threadIdx.x;
+    int num_chunks = size / chunk_size;
+    int chunkIdx = tid / chunk_size;
+    if (chunkIdx < num_chunks)
+    {
+        // starting point of chunk data
+        Complex_t *data = srcData + chunkIdx * chunk_size;
+        // index for each thread within the specific chunk
+        int idx = tid - chunkIdx * chunk_size;
+        // calculate butterfly coefficient pow_tester
+        /**
+         * Same procedure as the butterfly fft kernel
+         */
+        int Wn_k = (1 << (pow - stage)) * idx % chunk_size;
+        // butterfly coefficient = Wn ^ Wn_k
+        // Wn = e^(-2j*pi/Size)
+        // Wn ^ Wn_k = e ^ (-2j*pi*Wn_k/Size)
+        double theta = -2 * PI * Wn_k / chunk_size;
+        Complex_t twiddle = {cos(theta), sin(theta)};
+        // calculate the pair index and multiplication factor
+        int step = 1 << (stage - 1);
+        int group_size = 1 << stage;
+        int lower_bound = (idx / group_size) * group_size;
+        int upper_bound = lower_bound + group_size;
+        int pairIdx = idx + step;
+        Complex_t product, sum;
+        // product = p * a
+
+        // data[idx] = q - p*a
+        if (pairIdx >= upper_bound)
+        {
+            pairIdx = idx - step;
+            product = cudaComplexMul(twiddle, data[idx]);
+            sum = cudaComplexAdd(data[pairIdx], product);
+        }
+        else
+        {
+            product = cudaComplexMul(twiddle, data[pairIdx]);
+            // sum = q + (-1) * p * a
+            sum = cudaComplexAdd(data[idx], product);
+        }
+        // write into the index position
+        // __syncthreads();
+        data[idx] = sum;
+    }
+}
+
+/**
+ * Kernel function to perform swap for the fft res in chunk.
+ * @param srcData: input complete data with length 'size'.
+ * @param size: total size of input data
+ * @param chunk_size: chunk size
+ */
+__global__ void fftResSwapChunk_kernel(Complex_t *srcData, int size, int chunk_size)
+{
+    int tid = blockDim.x * blockIdx.x + threadIdx.x;
+    int num_chunks = size / chunk_size;
+    int chunkIdx = tid / chunk_size;
+    if (chunkIdx < num_chunks)
+    {
+        __shared__ Complex_t buffer[ChirpSize];
+        Complex_t *fftRes = srcData + chunkIdx * chunk_size;
+        int idx = tid - chunk_size * chunkIdx;
+        __syncthreads();
+        int mid = ChirpSize / 2;
+        if (idx > mid)
+        {
+            fftRes[idx] = buffer[idx - mid];
+        }
+        else if (idx < mid)
+        {
+            fftRes[idx] = buffer[idx + mid];
+        }
+        else
+        {
+            fftRes[idx].real = 0;
+            fftRes[idx].imag = 0;
+        }
+    }
+}
+/**
+ * kernel functiom to perform bit reverse swap for fft prepration
+ * @param srcData: complete input sequence
+ * @param size: length of input sequence
+ * @param chunk_size: chunk size
+ * @param pow: chunk_size = 2 ^ pow
+ */
+__global__ void bitReverseSwapChunk_kernel(Complex_t *srcData, int size, int chunk_size, int pow)
+{
+    int tid = blockDim.x * blockIdx.x + threadIdx.x;
+    int num_chunks = size / chunk_size;
+    int chunkIdx = tid / chunk_size;
+    if (chunkIdx < num_chunks)
+    {
+        int idx = tid - chunkIdx * chunk_size;
+        Complex_t *input = srcData + chunk_size * chunkIdx;
+        // swap the position
+        int pairIdx = bitsReverse(idx, pow);
+        if (pairIdx > idx)
+        {
+            Complex_t temp = input[idx];
+            input[idx] = input[pairIdx];
+            input[pairIdx] = temp;
+        }
+    }
+}
+
+/**
  * Wrapper function to luanch cuda kernels
  * @param input_host: data read from .bin file in short format, with length 'size' = 'SampleSize * ChirpSize * numRx * 2'.
  * @param base_frame_rx0_device: allocated base frame rx0 data space in device side, with length 'SampleSize * ChirpSize'.
@@ -558,13 +593,24 @@ __global__ void fftResSwap_kernel(Complex_t *fftRes)
  * @param frame_reshaped_device: allocated reshaped frame data space in device side, with length 'size/2'.
  * @param size: int type indicates the total length of 'input_host'.
  * @param rx0_extended_size: int type indicates the length of 'rx0_extended_size'.
- * @return: double format calculated distance of moving object
  *
  */
 void cudaAcceleration(double &speed, double &angle, double &distance, double &speedTime, double &angleTime, double &distTime, double &fftTime, double &preProcessingTime, double &findMaxTime, double &totalTime, short *input_host, Complex_t *base_frame_device, Complex_t *frame_buffer_device, Complex_t *frame_reshaped_device, int size, int rx0_extended_size)
 {
+
+    
+    cudaStream_t distStream;  
+    cudaStream_t angleStream;  
+    cudaStream_t speedStream;
+
+    cudaCheckError(cudaStreamCreate(&distStream));
+    cudaCheckError(cudaStreamCreate(&angleStream));  
+    cudaCheckError(cudaStreamCreate(&speedStream));  
+
+
+
     /**
-     * Distance detection
+     * Pre-processing
      */
     Timer timer;
     double start = timer.elapsed();
@@ -582,30 +628,24 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     short2complex_kernel<<<num_blocks_preProcessing, THREADS_PER_BLOCK>>>(input_device, preProcessing_buffer, size);
     cudaDeviceSynchronize();
 
-    // printf("buffer\n");
-    // printComplexCUDA(preProcessing_buffer, 46662, 46668, SampleSize * ChirpSize * RxSize);
-
     num_blocks_preProcessing = (THREADS_PER_BLOCK + size / 2 - 1) / THREADS_PER_BLOCK;
     complexReshape_kernel<<<num_blocks_preProcessing, THREADS_PER_BLOCK>>>(frame_reshaped_device, preProcessing_buffer, size / 2);
     cudaDeviceSynchronize();
-
-    // printf("frame_reshaped_device\n");
-    // printComplexCUDA(frame_reshaped_device, SampleSize * ChirpSize + 100, SampleSize * ChirpSize + 110, SampleSize * ChirpSize * RxSize);
-
-    // printf("base_frame_device\n");
-    // printComplexCUDA(base_frame_device, SampleSize * ChirpSize + 100, SampleSize * ChirpSize + 110, SampleSize * ChirpSize * RxSize);
 
     Complex_t *base_frame_rx0_device;
     cudaCheckError(cudaMalloc((void **)&base_frame_rx0_device, sizeof(Complex_t) * SampleSize * ChirpSize));
     cudaCheckError(cudaMemcpy(base_frame_rx0_device, base_frame_device, sizeof(Complex_t) * SampleSize * ChirpSize, cudaMemcpyDeviceToDevice));
     num_blocks_preProcessing = (THREADS_PER_BLOCK + rx0_extended_size - 1) / THREADS_PER_BLOCK;
     rxExtension_kernel<<<num_blocks_preProcessing, THREADS_PER_BLOCK>>>(base_frame_rx0_device, rx0_fft_input_device, frame_reshaped_device, SampleSize * ChirpSize, rx0_extended_size);
-    // printf("after reshaped kernel FFT input \n");
-    // printComplexCUDA(rx0_fft_input_device, 90, 110, rx0_extended_size);
+
 
     double preProcessingEnd = timer.elapsed();
     double fftStart = preProcessingEnd;
     preProcessingTime += preProcessingEnd - start;
+
+    /**
+     * Distance detection
+     */
 
     int cnt = 1, pow = 0;
     while (cnt < rx0_extended_size)
@@ -624,8 +664,7 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     double fftEnd = timer.elapsed();
     double findMaxStart = fftEnd;
     fftTime += fftEnd - fftStart;
-    // printf("FFT res \n");
-    // printComplexCUDA(rx0_fft_input_device, rx0_extended_size * 2 / 3, rx0_extended_size * 2 / 3 + 10, rx0_extended_size);
+
 
     double Fs_extend = fs * rx0_extended_size / (ChirpSize * SampleSize);
 
@@ -686,8 +725,6 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     cudaCheckError(cudaMalloc((void **)&angle_weights_device, sizeof(Complex_t) * RxSize));
     angleWeightInit_kernel<<<1, RxSize>>>(angle_weights_device, rx0_fft_input_device, rx_fft_input_device, maxAngleIdx, rx0_extended_size);
 
-    // printComplexCUDA(angle_weights_device, 0, RxSize, RxSize);
-    // above operations are verified
     // Stage4 MMM: Angle Matrix X angle_weights
     Complex_t *angle_matrix_device;
     int angle_sample_num = 180 / 0.1 + 1;
@@ -697,7 +734,7 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
 
     angleMatrixInit_kernel<<<num_blocks_angle, THREADS_PER_BLOCK>>>(angle_matrix_device, RxSize * angle_sample_num);
     cudaDeviceSynchronize();
-    // printComplexCUDA(angle_matrix_device, angle_sample_num * 2, angle_sample_num * 2 + 10, RxSize * angle_sample_num);
+
     num_blocks_angle = (angle_sample_num + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     Complex_t *angle_matrix_res_device;
     Complex_t *angle_matrix_res_host;
@@ -710,7 +747,6 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     cudaCheckError(cudaMemcpy(angle_matrix_res_host, angle_matrix_res_device, sizeof(Complex_t) * angle_sample_num, cudaMemcpyDeviceToHost));
     maxAngleIdx = findAbsMax(angle_matrix_res_host, angle_sample_num);
     findMaxTime += (timer.elapsed() - angleFindMax);
-    // printComplexCUDA(angle_matrix_res_device, 1100, 1110, angle_sample_num);
     // above operations are verified
     double maxAgl = (maxAngleIdx - 900.0) / 10.0;
     angle = maxAgl;
@@ -739,7 +775,7 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     cudaDeviceSynchronize();
     preProcessingTime += (timer.elapsed() - speedPreProc);
     // above extension is verified
-    // printComplexCUDA(rx0_extended_fft_input_device, 128,138,rx0_extended_size);
+
     cnt = 1;
     pow = 0;
     while (cnt < extended_sample_size)
@@ -748,24 +784,22 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
         pow++;
     }
     // stage2 apply fft for each padded chirp of rx0
-    num_blocks_speed = (extended_sample_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-
     double speedFFTBegin = timer.elapsed();
 
-    for (int i = 0; i < ChirpSize; i++)
+    num_blocks_speed = (extended_sample_size * ChirpSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    bitReverseSwapChunk_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fft_input_device, extended_sample_size * ChirpSize, extended_sample_size, pow);
+    cudaDeviceSynchronize();
+
+    for (int stage = 0; stage < pow; stage++)
     {
-        Complex_t *chirp_fft_ptr = i * extended_sample_size + rx0_extended_fft_input_device;
-        // bit reverse
-        bitReverseSwap_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(chirp_fft_ptr, extended_sample_size, pow);
-        cudaDeviceSynchronize();
-        for (int stage = 0; stage < pow; stage++)
-        {
-            butterflyFFT_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(chirp_fft_ptr, extended_sample_size, stage + 1, pow);
-        }
-        cudaDeviceSynchronize();
+        butterflyChunkFFT_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fft_input_device, extended_sample_size, extended_sample_size * ChirpSize, stage + 1, pow);
     }
+    cudaDeviceSynchronize();
+    
+    // above chunk vitreverseSwap is verified
+
     double speedMarker = timer.elapsed() - speedFFTBegin;
-    // printf("speed first fft time %.3f ms\n", 1000 * speedMarker * 89);
+
     fftTime += (timer.elapsed() - speedFFTBegin);
 
     // above FFT is verified
@@ -773,31 +807,41 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     Complex_t *rx0_extended_fftRes_transpose;
     cudaCheckError(cudaMalloc((void **)&rx0_extended_fftRes_transpose, sizeof(Complex_t) * rx0_extended_size));
     num_blocks_speed = (extended_sample_size * ChirpSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-    matrixTranspose_kenel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fft_input_device, rx0_extended_fftRes_transpose, extended_sample_size, ChirpSize);
 
+
+    matrixTranspose_kenel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fft_input_device, rx0_extended_fftRes_transpose, SampleSize, ChirpSize);
     cudaDeviceSynchronize();
+
+
     // stage4 apply fft for the transposed data
     // and swap the right and left half
     num_blocks_speed = (extended_sample_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     speedFFTBegin = timer.elapsed();
-    for (int i = 0; i < extended_sample_size; i++)
+
+    // above operations is verified
+
+    pow = 0;
+    cnt = 1;
+    while (cnt < ChirpSize)
     {
-        Complex_t *chirp_fft_ptr = i * ChirpSize + rx0_extended_fftRes_transpose;
-        // bit reverse
-        bitReverseSwap_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(chirp_fft_ptr, extended_sample_size, pow);
-        cudaDeviceSynchronize();
-        for (int stage = 0; stage < pow; stage++)
-        {
-            butterflyFFT_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(chirp_fft_ptr, ChirpSize, stage + 1, pow);
-            cudaDeviceSynchronize();
-        }
-        num_blocks_speed = (ChirpSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-        fftResSwap_kernel<<<num_blocks_speed, ChirpSize>>>(chirp_fft_ptr);
-        cudaDeviceSynchronize();
+        cnt <<= 1;
+        pow++;
     }
-    
+    num_blocks_speed = (extended_sample_size * ChirpSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+
+    bitReverseSwapChunk_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fftRes_transpose, extended_sample_size * ChirpSize, ChirpSize, pow);
+
+    for (int stage = 0; stage < pow; stage++)
+    {
+        butterflyChunkFFT_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fftRes_transpose, ChirpSize, rx0_extended_size, stage + 1, pow);
+    }
+
+
+    cudaDeviceSynchronize();
+    fftResSwapChunk_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fftRes_transpose, rx0_extended_size, ChirpSize);
+    cudaDeviceSynchronize();
+
     speedMarker = timer.elapsed() - speedFFTBegin;
-    // printf("speed second fft time %.3f ms\n", 1000 * speedMarker * 89);
 
     fftTime += (timer.elapsed() - speedFFTBegin);
 
@@ -819,6 +863,12 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     // printf("maxSpeed %.5f m/s\n", maxSpeed);
 
     totalTime += (timer.elapsed() - start);
+
+
+    cudaCheckError(cudaStreamDestroy(distStream));
+    cudaCheckError(cudaStreamDestroy(angleStream));  
+    cudaCheckError(cudaStreamDestroy(speedStream));  
+
 
     free(rx0_fft_res_host);
     free(angle_matrix_res_host);
