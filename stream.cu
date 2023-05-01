@@ -595,19 +595,20 @@ __global__ void bitReverseSwapChunk_kernel(Complex_t *srcData, int size, int chu
  * @param rx0_extended_size: int type indicates the length of 'rx0_extended_size'.
  *
  */
-void cudaAcceleration(double &speed, double &angle, double &distance, double &speedTime, double &angleTime, double &distTime, double &fftTime, double &preProcessingTime, double &findMaxTime, double &totalTime, short *input_host, Complex_t *base_frame_device, Complex_t *frame_buffer_device, Complex_t *frame_reshaped_device, int size, int rx0_extended_size)
+void cudaAcceleration(double &speed, double &angle, double &distance, double &speedTime,
+                      double &angleTime, double &distTime, double &fftTime, double &preProcessingTime,
+                      double &findMaxTime, double &totalTime, short *input_host,
+                      Complex_t *base_frame_device, Complex_t *frame_reshaped_device,
+                      int size, int rx0_extended_size)
 {
 
-    
-    cudaStream_t distStream;  
-    cudaStream_t angleStream;  
+    cudaStream_t distStream;
+    cudaStream_t angleStream;
     cudaStream_t speedStream;
 
     cudaCheckError(cudaStreamCreate(&distStream));
-    cudaCheckError(cudaStreamCreate(&angleStream));  
-    cudaCheckError(cudaStreamCreate(&speedStream));  
-
-
+    cudaCheckError(cudaStreamCreate(&angleStream));
+    cudaCheckError(cudaStreamCreate(&speedStream));
 
     /**
      * Pre-processing
@@ -638,7 +639,6 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     num_blocks_preProcessing = (THREADS_PER_BLOCK + rx0_extended_size - 1) / THREADS_PER_BLOCK;
     rxExtension_kernel<<<num_blocks_preProcessing, THREADS_PER_BLOCK>>>(base_frame_rx0_device, rx0_fft_input_device, frame_reshaped_device, SampleSize * ChirpSize, rx0_extended_size);
 
-
     double preProcessingEnd = timer.elapsed();
     double fftStart = preProcessingEnd;
     preProcessingTime += preProcessingEnd - start;
@@ -658,13 +658,12 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     for (int i = 0; i < pow; i++)
     {
         butterflyFFT_kernel<<<num_blocks_preProcessing, THREADS_PER_BLOCK>>>(rx0_fft_input_device, rx0_extended_size, i + 1, pow);
-        cudaDeviceSynchronize();
     }
+    cudaDeviceSynchronize();
 
     double fftEnd = timer.elapsed();
     double findMaxStart = fftEnd;
     fftTime += fftEnd - fftStart;
-
 
     double Fs_extend = fs * rx0_extended_size / (ChirpSize * SampleSize);
 
@@ -795,7 +794,7 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
         butterflyChunkFFT_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fft_input_device, extended_sample_size, extended_sample_size * ChirpSize, stage + 1, pow);
     }
     cudaDeviceSynchronize();
-    
+
     // above chunk vitreverseSwap is verified
 
     double speedMarker = timer.elapsed() - speedFFTBegin;
@@ -808,14 +807,11 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     cudaCheckError(cudaMalloc((void **)&rx0_extended_fftRes_transpose, sizeof(Complex_t) * rx0_extended_size));
     num_blocks_speed = (extended_sample_size * ChirpSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
-
     matrixTranspose_kenel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fft_input_device, rx0_extended_fftRes_transpose, SampleSize, ChirpSize);
     cudaDeviceSynchronize();
 
-
     // stage4 apply fft for the transposed data
     // and swap the right and left half
-    num_blocks_speed = (extended_sample_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     speedFFTBegin = timer.elapsed();
 
     // above operations is verified
@@ -835,7 +831,6 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     {
         butterflyChunkFFT_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fftRes_transpose, ChirpSize, rx0_extended_size, stage + 1, pow);
     }
-
 
     cudaDeviceSynchronize();
     fftResSwapChunk_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fftRes_transpose, rx0_extended_size, ChirpSize);
@@ -864,11 +859,9 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
 
     totalTime += (timer.elapsed() - start);
 
-
     cudaCheckError(cudaStreamDestroy(distStream));
-    cudaCheckError(cudaStreamDestroy(angleStream));  
-    cudaCheckError(cudaStreamDestroy(speedStream));  
-
+    cudaCheckError(cudaStreamDestroy(angleStream));
+    cudaCheckError(cudaStreamDestroy(speedStream));
 
     free(rx0_fft_res_host);
     free(angle_matrix_res_host);
@@ -886,4 +879,350 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
 
     cudaCheckError(cudaFree(rx0_extended_fftRes_transpose));
     cudaCheckError(cudaFree(preProcessing_buffer));
+}
+
+void launchPrePorc(short *input_host, Complex_t *base_frame_device, Complex_t *base_frame_rx0_device,
+                   Complex_t *rx0_fft_input_device, Complex_t *frame_reshaped_device, int size,
+                   int rx0_extended_size, cudaEvent_t &preProcEvt, cudaStream_t &preProcStream)
+{
+
+    int num_blocks = (THREADS_PER_BLOCK + size - 1) / THREADS_PER_BLOCK;
+    short *input_device;
+    // pre processing stream
+    // cudaCheckError(cudaStreamCreat(&preProcEvt));
+
+    cudaCheckError(cudaMalloc((void **)&input_device, sizeof(short) * size));
+    cudaCheckError(cudaMemcpy(input_device, input_host, sizeof(short) * size, cudaMemcpyHostToDevice));
+
+    Complex_t *preProcessing_buffer;
+    cudaCheckError(cudaMalloc((void **)&preProcessing_buffer, sizeof(Complex_t) * size / 2));
+
+    short2complex_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, preProcStream>>>(input_device, preProcessing_buffer, size);
+
+    num_blocks = (THREADS_PER_BLOCK + size / 2 - 1) / THREADS_PER_BLOCK;
+
+    cudaDeviceSynchronize();
+    complexReshape_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, preProcStream>>>(frame_reshaped_device, preProcessing_buffer, size / 2);
+
+    // Complex_t *base_frame_rx0_device;
+    // cudaCheckError(cudaMalloc((void **)&base_frame_rx0_device, sizeof(Complex_t) * SampleSize * ChirpSize));
+    cudaCheckError(cudaMemcpy(base_frame_rx0_device, base_frame_device, sizeof(Complex_t) * SampleSize * ChirpSize, cudaMemcpyDeviceToDevice));
+    num_blocks = (THREADS_PER_BLOCK + rx0_extended_size - 1) / THREADS_PER_BLOCK;
+    cudaDeviceSynchronize();
+    rxExtension_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, preProcStream>>>(base_frame_rx0_device, rx0_fft_input_device, frame_reshaped_device, SampleSize * ChirpSize, rx0_extended_size);
+
+    cudaCheckError(cudaFree(input_device));
+    cudaCheckError(cudaFree(preProcessing_buffer));
+    cudaCheckError(cudaEventRecord(preProcEvt, preProcStream));
+}
+
+void launchDistProc(cudaEvent_t &preProcEvt, cudaEvent_t &distEvt, cudaStream_t &distStream,
+                    Complex_t *distRes_fft_host_pinned, Complex_t *rx0_device, int rx0_extended_size)
+{
+    // block distStream untill the preprocessing event is happend
+    cudaCheckError(cudaStreamWaitEvent(distStream, preProcEvt));
+
+    /**
+     * copy memory buffers of DISTANCE PROC asyncrhoniously
+     */
+    Complex_t *rx0_fft_input_device;
+    cudaCheckError(cudaMallocAsync((void **)&rx0_fft_input_device, sizeof(Complex_t) * rx0_extended_size, distStream));
+    // cudaCheckError(cudaMalloc((void **)&rx0_fft_input_device, sizeof(Complex_t) * rx0_extended_size));
+
+    cudaCheckError(cudaMemcpyAsync(rx0_fft_input_device, rx0_device, sizeof(Complex_t) * rx0_extended_size, cudaMemcpyDeviceToDevice, distStream));
+    // cudaCheckError(cudaMemcpy(rx0_fft_input_device, rx0_device, sizeof(Complex_t) * rx0_extended_size, cudaMemcpyDeviceToDevice));
+
+    // distance calculation starts
+    int cnt = 1;
+    int pow = 0;
+    while (cnt < rx0_extended_size)
+    {
+        cnt <<= 1;
+        pow++;
+    }
+    int num_blocks = (THREADS_PER_BLOCK + rx0_extended_size - 1) / THREADS_PER_BLOCK;
+    bitReverseSwap_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, distStream>>>(rx0_fft_input_device, rx0_extended_size, pow);
+    // bitReverseSwap_kernel<<<num_blocks, THREADS_PER_BLOCK>>>(rx0_fft_input_device, rx0_extended_size, pow);
+    // cudaCheckError(cudaDeviceSynchronize());
+    for (int i = 0; i < pow; i++)
+    {
+        butterflyFFT_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, distStream>>>(rx0_fft_input_device, rx0_extended_size, i + 1, pow);
+        // butterflyFFT_kernel<<<num_blocks, THREADS_PER_BLOCK>>>(rx0_fft_input_device, rx0_extended_size, i + 1, pow);
+    }
+    // cudaCheckError(cudaDeviceSynchronize());
+
+    /**
+     * DIST RES write back
+     * copy the device result to host pinned memory
+     */
+    cudaCheckError(cudaMemcpyAsync(distRes_fft_host_pinned, rx0_fft_input_device, sizeof(Complex_t) * rx0_extended_size, cudaMemcpyDeviceToHost, distStream));
+    cudaCheckError(cudaFreeAsync(rx0_fft_input_device, distStream));
+    // cudaCheckError(cudaMemcpy(distRes_fft_host_pinned, rx0_fft_input_device, sizeof(Complex_t) * rx0_extended_size, cudaMemcpyDeviceToHost));
+    // cudaCheckError(cudaFree(rx0_fft_input_device));
+
+    cudaCheckError(cudaEventRecord(distEvt));
+}
+
+void launchAngleProc(cudaEvent_t &preProcEvt, cudaEvent_t &distEvt, cudaEvent_t &angleEvt, cudaStream_t &angleStream,
+                     Complex_t *frame_reshaped_device, Complex_t *base_frame_device,
+                     Complex_t *distRes_fft_host_pinned, Complex_t *angleRes_host_pinned,
+                     int rx0_extended_size, int maxIdx)
+{
+    // block angle stream untill the pre processing event is occured
+    cudaCheckError(cudaStreamWaitEvent(angleStream, preProcEvt));
+    // block angle stream untill the dsitance event is occured
+    cudaCheckError(cudaStreamWaitEvent(angleStream, distEvt));
+
+    /**
+     *  copy memory buffers of ANGLE PROCE asyncrhoniously
+     */
+    Complex_t *rx_fft_input_device;
+    Complex_t *frame_reshaped_device_angle;
+    Complex_t *base_frame_device_angle;
+    cudaCheckError(cudaMallocAsync((void **)&rx_fft_input_device, sizeof(Complex_t) * rx0_extended_size * (RxSize - 1), angleStream));
+    cudaCheckError(cudaMallocAsync((void **)&base_frame_device_angle, sizeof(Complex_t) * SampleSize * ChirpSize * RxSize, angleStream));
+    cudaCheckError(cudaMallocAsync((void **)&frame_reshaped_device_angle, sizeof(Complex_t) * SampleSize * ChirpSize * RxSize, angleStream));
+
+    cudaCheckError(cudaMemcpyAsync(frame_reshaped_device_angle, frame_reshaped_device, sizeof(Complex_t) * SampleSize * ChirpSize * RxSize, cudaMemcpyDeviceToDevice, angleStream));
+    cudaCheckError(cudaMemcpyAsync(base_frame_device_angle, base_frame_device, sizeof(Complex_t) * SampleSize * ChirpSize * RxSize, cudaMemcpyDeviceToDevice, angleStream));
+
+    int num_blocks = (rx0_extended_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+
+    int cnt = 1, pow = 0;
+    while (cnt < rx0_extended_size)
+    {
+        cnt <<= 1;
+        pow++;
+    }
+
+    for (int i = 0; i < RxSize - 1; i++)
+    {
+        Complex_t *rx_fft_input_device_ptr = rx_fft_input_device + i * rx0_extended_size;
+        Complex_t *reshaped_frame_device_ptr = frame_reshaped_device_angle + (i + 1) * ChirpSize * SampleSize;
+        Complex_t *base_frame_device_ptr = base_frame_device + (i + 1) * ChirpSize * SampleSize;
+
+        rxExtension_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, angleStream>>>(base_frame_device_ptr, rx_fft_input_device_ptr, reshaped_frame_device_ptr, SampleSize * ChirpSize, rx0_extended_size);
+        bitReverseSwap_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, angleStream>>>(rx_fft_input_device_ptr, rx0_extended_size, pow);
+        for (int stage = 0; stage < pow; stage++)
+        {
+            butterflyFFT_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, angleStream>>>(rx_fft_input_device_ptr, rx0_extended_size, stage + 1, pow);
+        }
+    }
+
+    Complex_t *angle_weights_device;
+    Complex_t *rx0_fft_input_device;
+    Complex_t *angle_matrix_device;
+    Complex_t *angle_matrix_res_device;
+    int angle_sample_num = 180 / 0.1 + 1;
+    cudaCheckError(cudaMallocAsync((void **)&angle_weights_device, sizeof(Complex_t) * RxSize, angleStream));
+    cudaCheckError(cudaMallocAsync((void **)&rx0_fft_input_device, sizeof(Complex_t) * rx0_extended_size, angleStream));
+    cudaCheckError(cudaMallocAsync((void **)&angle_matrix_device, sizeof(Complex_t) * RxSize * angle_sample_num, angleStream));
+    cudaCheckError(cudaMallocAsync((void **)&angle_matrix_res_device, sizeof(Complex_t) * angle_sample_num, angleStream));
+
+    cudaCheckError(cudaMemcpyAsync(rx0_fft_input_device, distRes_fft_host_pinned, sizeof(Complex_t) * rx0_extended_size, cudaMemcpyDeviceToDevice, angleStream));
+
+    angleWeightInit_kernel<<<1, RxSize, 0, angleStream>>>(angle_weights_device, rx0_fft_input_device, rx_fft_input_device, maxIdx, rx0_extended_size);
+    num_blocks = (angle_sample_num + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    angleMatrixInit_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, angleStream>>>(angle_matrix_device, RxSize * angle_sample_num);
+    angleMatrixMul_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, angleStream>>>(angle_matrix_device, angle_weights_device, angle_matrix_res_device, angle_sample_num);
+    /**
+     * ANGLE RES write back
+     * copy the device result to host pinned memory
+     */
+
+    cudaCheckError(cudaMemcpyAsync(angleRes_host_pinned, angle_matrix_res_device, sizeof(Complex_t) * angle_sample_num, cudaMemcpyDeviceToHost, angleStream));
+    cudaCheckError(cudaFreeAsync(rx_fft_input_device, angleStream));
+    cudaCheckError(cudaFreeAsync(frame_reshaped_device_angle, angleStream));
+    cudaCheckError(cudaFreeAsync(base_frame_device_angle, angleStream));
+    cudaCheckError(cudaFreeAsync(angle_weights_device, angleStream));
+    cudaCheckError(cudaFreeAsync(rx0_fft_input_device, angleStream));
+    cudaCheckError(cudaFreeAsync(angle_matrix_device, angleStream));
+    cudaCheckError(cudaFreeAsync(angle_matrix_res_device, angleStream));
+
+    cudaCheckError(cudaEventRecord(angleEvt, angleStream));
+}
+
+void launchSpeedProc(cudaEvent_t &preProcEvt, cudaEvent_t &speedEvt, cudaStream_t &speedStream, Complex_t *frame_reshaped_device,
+                     Complex_t *base_frame_rx0_device, Complex_t *speedRes_host_pinned, int rx0_extended_size)
+{
+    cudaCheckError(cudaStreamWaitEvent(speedStream, preProcEvt));
+
+    /**
+     *  copy memory buffers of SPEED PROC asyncrhoniously
+     */
+    Complex_t *rx0_extended_fft_input_device;
+    int extended_sample_size = nextPow2(SampleSize);
+    printf("size of array %lu bytes\n", sizeof(Complex_t) * extended_sample_size * ChirpSize);
+    cudaCheckError(cudaMallocAsync((void **)&rx0_extended_fft_input_device, sizeof(Complex_t) * extended_sample_size * ChirpSize, speedStream));
+
+    int num_blocks = (rx0_extended_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    rx0ChirpPadding_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, speedStream>>>(rx0_extended_fft_input_device, frame_reshaped_device, base_frame_rx0_device, rx0_extended_size, SampleSize * ChirpSize, extended_sample_size);
+    int cnt = 1;
+    int pow = 0;
+    while (cnt < extended_sample_size)
+    {
+        cnt <<= 1;
+        pow++;
+    }
+    num_blocks = (extended_sample_size * ChirpSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    bitReverseSwapChunk_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, speedStream>>>(rx0_extended_fft_input_device, extended_sample_size * ChirpSize, extended_sample_size, pow);
+    for (int stage = 0; stage < pow; stage++)
+    {
+        butterflyChunkFFT_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, speedStream>>>(rx0_extended_fft_input_device, extended_sample_size, extended_sample_size * ChirpSize, stage + 1, pow);
+    }
+
+    Complex_t *rx0_extended_fftRes_transpose;
+    cudaCheckError(cudaMallocAsync((void **)&rx0_extended_fftRes_transpose, sizeof(Complex_t) * extended_sample_size * ChirpSize, speedStream));
+    matrixTranspose_kenel<<<num_blocks, THREADS_PER_BLOCK, 0, speedStream>>>(rx0_extended_fft_input_device, rx0_extended_fftRes_transpose, SampleSize, ChirpSize);
+
+    cnt = 1;
+    pow = 0;
+    while (cnt < ChirpSize)
+    {
+        cnt <<= 1;
+        pow++;
+    }
+
+    bitReverseSwapChunk_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, speedStream>>>(rx0_extended_fftRes_transpose, rx0_extended_size * ChirpSize, ChirpSize, pow);
+    for (int stage = 0; stage < pow; stage++)
+    {
+        butterflyChunkFFT_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, speedStream>>>(rx0_extended_fftRes_transpose, ChirpSize, ChirpSize * extended_sample_size, stage + 1, pow);
+    }
+
+    fftResSwapChunk_kernel<<<num_blocks, THREADS_PER_BLOCK, 0, speedStream>>>(rx0_extended_fftRes_transpose, ChirpSize * extended_sample_size, ChirpSize);
+
+    /**
+     * SPEED RES write back
+     * copy the device result to host pinned memory
+     */
+    cudaCheckError(cudaMemcpyAsync(speedRes_host_pinned, rx0_extended_fftRes_transpose, sizeof(Complex_t) * ChirpSize * extended_sample_size, cudaMemcpyDeviceToHost, speedStream));
+    cudaCheckError(cudaFreeAsync(rx0_extended_fft_input_device, speedStream));
+    cudaCheckError(cudaFreeAsync(rx0_extended_fftRes_transpose, speedStream));
+    cudaCheckError(cudaEventRecord(speedEvt, speedStream));
+}
+
+void cudaMultiStreamAcceleration(short *input_host, Complex_t *base_frame_device,
+                                 Complex_t *frame_reshaped_device, int size,
+                                 int rx0_extended_size)
+{
+    Timer timer;
+    double start = timer.elapsed();
+    /**
+     * create streams and event for syncrhonization and conccurent processing
+     */
+    cudaStream_t distStream;
+    cudaStream_t *distStreamPtr = &distStream;
+
+    cudaStream_t angleStream;
+    cudaStream_t *angleStreamPtr = &angleStream;
+
+    cudaStream_t speedStream;
+    cudaStream_t *speedStreamPtr = &speedStream;
+
+    cudaStream_t preProcStream;
+    cudaStream_t *preProcStreamPtr = &preProcStream;
+
+    cudaCheckError(cudaStreamCreate(&distStream));
+    cudaCheckError(cudaStreamCreate(&angleStream));
+    cudaCheckError(cudaStreamCreate(&speedStream));
+    cudaCheckError(cudaStreamCreate(&preProcStream));
+
+    cudaEvent_t preProcEvt;
+    cudaEvent_t *preProcEvtPtr = &preProcEvt;
+
+    cudaEvent_t angleEvt;
+    cudaEvent_t *angleEvtPtr = &angleEvt;
+
+    cudaEvent_t distEvt;
+    cudaEvent_t *distEvtPtr = &distEvt;
+
+    cudaEvent_t speedEvt;
+    cudaEvent_t *speedEvtPtr = &speedEvt;
+
+    cudaCheckError(cudaEventCreateWithFlags(&preProcEvt, cudaEventDisableTiming));
+    cudaCheckError(cudaEventCreateWithFlags(&angleEvt, cudaEventDisableTiming));
+    cudaCheckError(cudaEventCreateWithFlags(&distEvt, cudaEventDisableTiming));
+    cudaCheckError(cudaEventCreateWithFlags(&speedEvt, cudaEventDisableTiming));
+
+    Complex_t *rx0_device;
+    cudaCheckError(cudaMalloc((void **)&rx0_device, sizeof(Complex_t) * rx0_extended_size));
+    Complex_t *distRes_fft_host_pinned;
+    cudaCheckError(cudaMallocHost((void **)&distRes_fft_host_pinned, sizeof(Complex_t) * rx0_extended_size));
+
+    Complex_t *base_frame_rx0_device;
+    cudaCheckError(cudaMalloc((void **)&base_frame_rx0_device, sizeof(Complex_t) * SampleSize * ChirpSize));
+
+    /**
+     * launch pre processing stream
+     */
+    // launchPrePorc(input_host, base_frame_device, base_frame_rx0_device, rx0_device,
+    //               frame_reshaped_device, size, rx0_extended_size, &preProcEvt, &preProcStream);
+    printf("launch preprocessing\n");
+    launchPrePorc(input_host, base_frame_device, base_frame_rx0_device, rx0_device,
+                  frame_reshaped_device, size, rx0_extended_size, *preProcEvtPtr, *preProcStreamPtr);
+    // hold the host untill the preprocessing stage is finished
+    cudaCheckError(cudaEventSynchronize(preProcEvt));
+    /**
+     * launch distance processing stream
+     */
+    printf("launch distance processing\n");
+    launchDistProc(*preProcEvtPtr, *distEvtPtr, *distStreamPtr, distRes_fft_host_pinned, rx0_device, rx0_extended_size);
+
+    /**
+     * launch speed processing
+     */
+    Complex_t *speedRes_host_pinned;
+    cudaCheckError(cudaMallocHost((void **)&speedRes_host_pinned, sizeof(Complex_t) * rx0_extended_size));
+    
+    // printf("launch speed processing\n");
+    // launchSpeedProc(*preProcEvtPtr, *speedEvtPtr, *speedStreamPtr, frame_reshaped_device, base_frame_rx0_device, speedRes_host_pinned, rx0_extended_size);
+
+    // only when distance is calculated the angle stream is able to launch
+    cudaCheckError(cudaEventSynchronize(distEvt));
+    /**
+     * distance result host processing
+     */
+    cudaCheckError(cudaStreamSynchronize(distStream));
+    int maxDistIdx = findAbsMax(distRes_fft_host_pinned, floor(0.4 * rx0_extended_size));
+    int maxDist = maxDistIdx * (ChirpSize * SampleSize) / rx0_extended_size;
+    /**
+     * launch angle processing only when max distance index is found
+     */
+    Complex_t *angleRes_host_pinned;
+    int angle_sample_num = 180 / 0.1 + 1;
+    cudaCheckError(cudaMallocHost((void **)&angleRes_host_pinned, sizeof(Complex_t) * angle_sample_num));
+    // printf("launch angle processing\n");
+
+    // launchAngleProc(*preProcEvtPtr, *distEvtPtr, *angleEvtPtr, *angleStreamPtr, frame_reshaped_device, base_frame_device,
+                    // distRes_fft_host_pinned, angleRes_host_pinned, rx0_extended_size, maxDistIdx);
+    /**
+     * result host processing
+     */
+
+    cudaCheckError(cudaStreamSynchronize(speedStream));
+    int maxSpeedIdx = findAbsMax(speedRes_host_pinned, ChirpSize * SampleSize) % ChirpSize;
+    double fr = 1e6 / 64;
+    double LAMDA = 3.0e08 / 77e9;
+    double maxSpeed = ((maxSpeedIdx)*fr / ChirpSize - fr / 2) * LAMDA / 2;
+
+    cudaCheckError(cudaStreamSynchronize(angleStream));
+    int maxAngleIdx = findAbsMax(angleRes_host_pinned, angle_sample_num);
+    double maxAngle = (maxAngleIdx - 900.0) / 10.0;
+    cudaDeviceSynchronize();
+    double duration = timer.elapsed() - start;
+    double fps = 1 / duration;
+    printf("distance %.5d angle %.5f speed %.5f  fps %.5f \n", maxDist, maxSpeed, maxAngle, fps);
+
+    // wait for all stream finished
+
+    cudaCheckError(cudaFreeHost(distRes_fft_host_pinned));
+    cudaCheckError(cudaFreeHost(angleRes_host_pinned));
+    cudaCheckError(cudaFreeHost(speedRes_host_pinned));
+
+    cudaCheckError(cudaFree(rx0_device));
+    cudaCheckError(cudaFree(base_frame_rx0_device));
+    cudaCheckError(cudaEventDestroy(preProcEvt));
+    cudaCheckError(cudaEventDestroy(distEvt));
+    cudaCheckError(cudaEventDestroy(angleEvt));
+    cudaCheckError(cudaEventDestroy(speedEvt));
 }

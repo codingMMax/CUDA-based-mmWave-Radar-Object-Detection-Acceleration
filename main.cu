@@ -55,9 +55,7 @@ int main(int argc, char *argv[])
     Complex_t *frame_reshaped_device;
     Complex_t *base_frame_rx0_device;
     Complex_t *base_frame_device;
-    Complex_t *frame_buffer_device; 
 
-    cudaCheckError(cudaMalloc((void **)&frame_buffer_device, sizeof(Complex_t) * size / 2));
     cudaCheckError(cudaMalloc((void **)&frame_reshaped_device, sizeof(Complex_t) * size / 2));
     cudaCheckError(cudaMalloc((void **)&base_frame_device, sizeof(Complex_t) * size / 2));
 
@@ -69,11 +67,15 @@ int main(int argc, char *argv[])
     Timer timer;
     double fftTime = 0, speedTime = 0, preProcessingTime = 0, findMaxTime = 0, totalTime = 0, angleTime=0, distTime = 0;
     double distance, speed, angle;
-    while ((size = (int)fread(read_data, sizeof(short), data_per_frame, fp)) > 0)
+    if ((size = (int)fread(read_data, sizeof(short), data_per_frame, fp)) > 0)
     {
 
         // cudaDist[frameCnt] = cudaAcceleration(fftTime, preProcessingTime, findMaxTime, totalTime, read_data, base_frame_rx0_device, frame_buffer_device, frame_reshaped_device, size, rx0_extended_size);
-        cudaAcceleration(speed,angle,distance,speedTime ,angleTime, distTime,fftTime, preProcessingTime, findMaxTime, totalTime, read_data, base_frame_device, frame_buffer_device, frame_reshaped_device, size, rx0_extended_size);
+        // cudaAcceleration(speed,angle,distance,speedTime ,angleTime, distTime,
+        //                 fftTime, preProcessingTime, findMaxTime, totalTime, 
+        //                 read_data, base_frame_device, frame_reshaped_device, 
+        //                 size, rx0_extended_size);
+        cudaMultiStreamAcceleration(read_data, base_frame_device, frame_reshaped_device, size, rx0_extended_size);
         
         
         cudaDist[frameCnt] = distance;
@@ -99,7 +101,6 @@ int main(int argc, char *argv[])
 
     // end region
     cudaCheckError(cudaFree(base_frame_device));
-    cudaCheckError(cudaFree(frame_buffer_device));
     cudaCheckError(cudaFree(frame_reshaped_device));
     cudaCheckError(cudaFree(base_frame_rx0_device));
 

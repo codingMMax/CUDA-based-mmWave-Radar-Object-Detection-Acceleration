@@ -70,6 +70,7 @@ struct Complex_t
 void preProcessing_host(short *OriginalArray, Complex_t *Reshape, int size);
 void printComplexCUDA(Complex_t *input, int start, int end, int size);
 void printShortCUDA(short *input, int start, int end, int size);
+int findAbsMax(Complex_t *ptr, int size);
 __device__ int cudaFindAbsMax(Complex_t *ptr, int size);
 __device__ static Complex_t cudaComplexSub(Complex_t a, Complex_t b);
 __device__ static Complex_t cudaComplexAdd(Complex_t a, Complex_t b);
@@ -123,7 +124,6 @@ __global__ void bitReverseSwap_kernel(Complex_t *input, int size, int pow);
  */
 __global__ void butterflyFFT_kernel(Complex_t *data, int size, int stage, int pow);
 
-
 /**
  * Kernel function that initialize the angle weights in 3 stages.
  * Stage1: initialize the 'angle_fft_buffer[i]' = 'reshaped_frame[i] - base_frame[i]'
@@ -171,40 +171,61 @@ __global__ void fftResSwap_kernel(Complex_t *fftRes, int size);
 
 /**
  * Kernel function to perform fft for the input sequence in chunk.
- * 
+ *
  * @param srcData: input complete sequence that need to be sliced into chunk
  * @param chunk_size: chunk size to perform
- * @param size: input complete size 
+ * @param size: input complete size
  * @param stage: current stage of fft input
  * @param pow: chunk_size = 2 ^ pow
-*/
-__global__ void butterflyChunkFFT_kernel(Complex_t* srcData, int chunk_size, int size, int stage, int pow);
+ */
+__global__ void butterflyChunkFFT_kernel(Complex_t *srcData, int chunk_size, int size, int stage, int pow);
 
 /**
  * Kernel function to perform swap for the fft res in chunk.
  * @param srcData: input complete data with length 'size'.
  * @param size: total size of input data
- * @param chunk_size: chunk size 
-*/
-__global__ void fftResSwapChunk_kernel(Complex_t* srcData, int size, int chunk_size);
+ * @param chunk_size: chunk size
+ */
+__global__ void fftResSwapChunk_kernel(Complex_t *srcData, int size, int chunk_size);
 
 /**
  * kernel functiom to perform bit reverse swap for fft prepration
  * @param srcData: complete input sequence
  * @param size: length of input sequence
- * @param chunk_size: chunk size 
+ * @param chunk_size: chunk size
  * @param pow: chunk_size = 2 ^ pow
-*/
+ */
 __global__ void bitReverseSwapChunk_kernel(Complex_t *srcData, int size, int chunk_size, int pow);
-
 
 /**
  * Wrapper function to luanch cuda kernels
  * @param: Input: input_host: data read from .bin file in short format, with length 'size' = 'SampleSize * ChirpSize * numRx * 2'.
  * @param: Input: base_frame_rx0_device: allocated base frame rx0 data space in device side, with length 'SampleSize * ChirpSize'.
- * @param: Input: frame_buffer_device: allocated frame reshape buffer sapce in device side, with length 'size'.
  * @param: Input: frame_reshaped_device: allocated reshaped frame data space in device side, with length 'size/2'.
  * @param: Input: size: int type indicates the total length of 'input_host'.
  * @param: Input: rx0_extended_size: int type indicates the length of 'rx0_extended_size'.
  */
-void cudaAcceleration(double &speed, double &angle, double &distance, double &speedTime, double &angleTime, double &distTime, double &fftTime, double &preProcessingTime, double &findMaxTime, double &totalTime, short *input_host, Complex_t *base_frame_device, Complex_t *frame_buffer_device, Complex_t *frame_reshaped_device, int size, int rx0_extended_size);
+void cudaAcceleration(double &speed, double &angle, double &distance,
+                      double &speedTime, double &angleTime, double &distTime,
+                      double &fftTime, double &preProcessingTime, double &findMaxTime, double &totalTime,
+                      short *input_host, Complex_t *base_frame_device, Complex_t *frame_reshaped_device,
+                      int size, int rx0_extended_size);
+
+void launchPrePorc(short *input_host, Complex_t *base_frame_device, Complex_t *base_frame_rx0_device,
+                   Complex_t *rx0_fft_input_device, Complex_t *frame_reshaped_device, int size,
+                   int rx0_extended_size, cudaEvent_t *preProcEvt, cudaStream_t *preProcStream);
+
+void launchDistProc(cudaEvent_t &preProcEvt, cudaEvent_t &distEvt, cudaStream_t &distStream,
+                    Complex_t *distRes_fft_host_pinned, Complex_t *rx0_device, int rx0_extended_size);
+
+void launchAngleProc(cudaEvent_t &preProcEvt, cudaEvent_t &distEvt, cudaEvent_t &angleEvt, cudaStream_t &angleStream,
+                     Complex_t *frame_reshaped_device, Complex_t *base_frame_device,
+                     Complex_t *distRes_fft_host_pinned, Complex_t *angleRes_host_pinned,
+                     int rx0_extended_size, int maxIdx);
+
+void launchSpeedProc(cudaEvent_t &preProcEvt, cudaEvent_t &speedEvt, cudaStream_t &speedStream, Complex_t *frame_reshaped_device,
+                     Complex_t *base_frame_rx0_device, Complex_t *speedRes_host_pinned, int rx0_extended_size);
+
+void cudaMultiStreamAcceleration(short *input_host, Complex_t *base_frame_device,
+                                 Complex_t *frame_reshaped_device, int size,
+                                 int rx0_extended_size);
