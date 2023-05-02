@@ -844,7 +844,6 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
 
     totalTime += (timer.elapsed() - start);
 
-
     free(rx0_fft_res_host);
     free(angle_matrix_res_host);
     free(speed_fft_res_host);
@@ -1199,7 +1198,9 @@ void cudaMultiStreamAcceleration(cudaStream_t &angleStream, cudaStream_t &prePro
     launchPrePorc(input_host, base_frame_device, base_frame_rx0_device, rx0_device,
                   frame_reshaped_device, size, rx0_extended_size, *preProcStartEvtPtr, *preProcEndEvtPtr, *preProcStreamPtr);
     // hold the host untill the preprocessing stage is finished
-    cudaCheckError(cudaEventSynchronize(preProcEndEvt));
+    // cudaCheckError(cudaEventSynchronize(preProcEndEvt));
+    cudaCheckError(cudaStreamSynchronize(preProcStream));
+
     /**
      * launch distance processing stream
      */
@@ -1214,11 +1215,12 @@ void cudaMultiStreamAcceleration(cudaStream_t &angleStream, cudaStream_t &prePro
                     rx0_extended_size);
 
     // only when distance is calculated the angle stream is able to launch
-    cudaCheckError(cudaEventSynchronize(distEndEvt));
     /**
      * distance result host processing
      */
-    cudaCheckError(cudaStreamSynchronize(distStream));
+    // cudaCheckError(cudaStreamSynchronize(distStream));
+    cudaCheckError(cudaEventSynchronize(distEndEvt));
+
     int maxDistIdx = findAbsMax(distRes_fft_host_pinned, floor(0.4 * rx0_extended_size));
     maxDistIdx = maxDistIdx * (ChirpSize * SampleSize) / rx0_extended_size;
     double Fs_extend = fs * rx0_extended_size / (ChirpSize * SampleSize);
@@ -1237,13 +1239,15 @@ void cudaMultiStreamAcceleration(cudaStream_t &angleStream, cudaStream_t &prePro
      * result host processing
      */
 
-    cudaCheckError(cudaStreamSynchronize(speedStream));
+    cudaCheckError(cudaEventSynchronize(speedEndEvt));
     int maxSpeedIdx = findAbsMax(speedRes_host_pinned, ChirpSize * SampleSize) % ChirpSize;
     double fr = 1e6 / 64;
     double LAMDA = 3.0e08 / 77e9;
     double maxSpeed = ((maxSpeedIdx)*fr / ChirpSize - fr / 2) * LAMDA / 2;
 
-    cudaCheckError(cudaStreamSynchronize(angleStream));
+    // cudaCheckError(cudaStreamSynchronize(angleStream));
+    cudaCheckError(cudaEventSynchronize(angleEndEvt));
+
     int maxAngleIdx = findAbsMax(angleRes_host_pinned, angle_sample_num);
     double maxAngle = (maxAngleIdx - 900.0) / 10.0;
     cudaCheckError(cudaDeviceSynchronize());
@@ -1255,7 +1259,9 @@ void cudaMultiStreamAcceleration(cudaStream_t &angleStream, cudaStream_t &prePro
 
     if (multiStreamCnt == 89)
     {
-        float preProc, distProc, angleProc, speedProc;
+        float preProc, distProc, angleProc, speedProc, totalProc;
+
+        cudaCheckError(cudaEventElapsedTime(&totalProc, preProcStartEvt, angleEndEvt));
 
         cudaCheckError(cudaEventElapsedTime(&preProc, preProcStartEvt, preProcEndEvt));
         cudaCheckError(cudaEventElapsedTime(&distProc, distStartEvt, distEndEvt));
@@ -1263,12 +1269,13 @@ void cudaMultiStreamAcceleration(cudaStream_t &angleStream, cudaStream_t &prePro
         cudaCheckError(cudaEventElapsedTime(&speedProc, speedStartEvt, speedEndEvt));
 
         // printf("distance %.3f m angle %.3f degree speed %.3f m/s\n", distance, maxAngle, maxSpeed);
-        printf("inner Timmer:\ntotal time %.3f ms fps %.3f \n", (1000 * duration) * multiStreamCnt, fps / multiStreamCnt);
-        printf("preProcessing time %.3f ms fps %.3f \n", (1000 * preProc), multiStreamCnt / preProc);
-        printf("distance time %.3f ms, fps %.3f\n", (1000 * distProc), multiStreamCnt / distProc);
-        printf("angle time %.3f ms, fps %.3f\n", (1000 * angleProc), multiStreamCnt / angleProc);
-        printf("speed time %.3f ms, fps %.3f\n", (1000 * speedProc), multiStreamCnt / speedProc);
-        printf("multiStreamCnt %d\n", multiStreamCnt);
+        printf("inner Timmer:\ntotal time in CPU%.3f ms fps %.3f \n", (1000 * duration) * multiStreamCnt, fps / multiStreamCnt);
+        printf("total time in CUDA time %.3f ms fps %.3f \n", (multiStreamCnt * totalProc), 1000 / totalProc);
+        printf("total preProcessing time %.3f ms fps %.3f \n", (multiStreamCnt * preProc), 1000 / preProc);
+        printf("total distance time %.3f ms, fps %.3f\n", (multiStreamCnt * distProc), 1000 / distProc);
+        printf("total angle time %.3f ms, fps %.3f\n", (multiStreamCnt * angleProc), 1000 / angleProc);
+        printf("total speed time %.3f ms, fps %.3f\n", (multiStreamCnt * speedProc), 1000 / speedProc);
+        printf("total multiStreamCnt %d\n", multiStreamCnt);
     }
     cudaDeviceSynchronize();
 
