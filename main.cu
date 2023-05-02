@@ -4,7 +4,7 @@ int main(int argc, char *argv[])
 {
     for (int i = 0; i < 1; i++)
     {
-        printf("CUDA Stream %d\n", i);
+        // printf("CUDA Stream %d\n", i);
 
         char filepath[] = "./fhy_direct.bin";
         int data_per_frame = ChirpSize * SampleSize * numRx * 2;
@@ -88,10 +88,23 @@ int main(int argc, char *argv[])
 
         cudaCheckError(cudaMalloc((void **)&rx0_extended_fft_input_device, sizeof(Complex_t) * extended_sample_size * ChirpSize));
 
+        /**
+         * stream create
+         */
+        cudaStream_t distStream;
+        cudaStream_t speedStream;
+        cudaStream_t preProcStream;
+        cudaStream_t angleStream;
+        cudaCheckError(cudaStreamCreate(&distStream));
+        cudaCheckError(cudaStreamCreate(&angleStream));
+        cudaCheckError(cudaStreamCreate(&speedStream));
+        cudaCheckError(cudaStreamCreate(&preProcStream));
+
         Timer timer;
         double fftTime = 0, speedTime = 0, preProcessingTime = 0, findMaxTime = 0, totalTime = 0, angleTime = 0, distTime = 0;
         double distance, speed, angle;
         bool singleStream = false;
+        double multiStreamTime = timer.elapsed();
         while ((size = (int)fread(read_data, sizeof(short), data_per_frame, fp)) > 0)
         {
 
@@ -100,7 +113,7 @@ int main(int argc, char *argv[])
             //                  read_data, base_frame_device, frame_reshaped_device,
             //                  size, rx0_extended_size);
 
-            cudaMultiStreamAcceleration(read_data, base_frame_device, frame_reshaped_device, rx0_fft_input_device_dist,
+            cudaMultiStreamAcceleration(angleStream, preProcStream, speedStream, distStream, read_data, base_frame_device, frame_reshaped_device, rx0_fft_input_device_dist,
                                         rx_fft_input_device_angle, frame_reshaped_device_angle, base_frame_device_angle,
                                         angle_weights_device, rx0_fft_input_device_angle, angle_matrix_device,
                                         angle_matrix_res_device, rx0_extended_fftRes_transpose, rx0_extended_fft_input_device,
@@ -113,9 +126,10 @@ int main(int argc, char *argv[])
             // printf("cudaDist[%d] %.6f m\n", frameCnt, cudaDist[frameCnt]);
             // printf("cudaAngle[%d] %.6f degree\n", frameCnt, cudaAngle[frameCnt]);
             // printf("cudaSpeed[%d] %.6f m/s\n", frameCnt, cudaSpeed[frameCnt]);
-
+            cudaCheckError(cudaDeviceSynchronize());
             frameCnt++;
         }
+        multiStreamTime = timer.elapsed() - multiStreamTime;
         if (singleStream)
         {
             printf("CUDA Stream inner total time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * totalTime, 1000.0 * totalTime / frameCnt, frameCnt / totalTime);
@@ -125,8 +139,10 @@ int main(int argc, char *argv[])
             printf("CUDA Stream total distance calculation time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * distTime, 1000.0 * distTime / frameCnt, frameCnt / distTime);
             printf("CUDA Stream total angle calculation time time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * angleTime, 1000.0 * angleTime / frameCnt, frameCnt / angleTime);
             printf("CUDA Stream total speed calculation time time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * speedTime, 1000.0 * speedTime / frameCnt, frameCnt / speedTime);
-        } else {
-
+        }
+        else
+        {
+            printf("CUDA Stream multi stream total time %.3f ms, %.3f ms per frame FPS %.3f \n", 1000.0 * multiStreamTime, 1000.0 * multiStreamTime / frameCnt, frameCnt / multiStreamTime);
         }
         // end region
         cudaCheckError(cudaFree(base_frame_device));
@@ -145,6 +161,11 @@ int main(int argc, char *argv[])
         // speed buffer free
         cudaCheckError(cudaFree(rx0_extended_fft_input_device));
         cudaCheckError(cudaFree(rx0_extended_fftRes_transpose));
+
+        cudaCheckError(cudaStreamDestroy(preProcStream));
+        cudaCheckError(cudaStreamDestroy(distStream));
+        cudaCheckError(cudaStreamDestroy(angleStream));
+        cudaCheckError(cudaStreamDestroy(speedStream));
 
         free(base_frame_reshaped);
         free(base_frame_rx0);

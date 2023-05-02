@@ -593,14 +593,6 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
                       int size, int rx0_extended_size)
 {
 
-    cudaStream_t distStream;
-    cudaStream_t angleStream;
-    cudaStream_t speedStream;
-
-    cudaCheckError(cudaStreamCreate(&distStream));
-    cudaCheckError(cudaStreamCreate(&angleStream));
-    cudaCheckError(cudaStreamCreate(&speedStream));
-
     /**
      * Pre-processing
      */
@@ -852,9 +844,6 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
 
     totalTime += (timer.elapsed() - start);
 
-    cudaCheckError(cudaStreamDestroy(distStream));
-    cudaCheckError(cudaStreamDestroy(angleStream));
-    cudaCheckError(cudaStreamDestroy(speedStream));
 
     free(rx0_fft_res_host);
     free(angle_matrix_res_host);
@@ -876,9 +865,10 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
 
 void launchPrePorc(short *input_host, Complex_t *base_frame_device, Complex_t *base_frame_rx0_device,
                    Complex_t *rx0_fft_input_device, Complex_t *frame_reshaped_device, int size,
-                   int rx0_extended_size, cudaEvent_t &preProcEvt, cudaStream_t &preProcStream)
+                   int rx0_extended_size, cudaEvent_t &preProcStartEvt, cudaEvent_t &preProcEndEvt, cudaStream_t &preProcStream)
 {
     // printf("launch preprocessing\n");
+    cudaCheckError(cudaEventRecord(preProcStartEvt, preProcStream));
 
     int num_blocks = (THREADS_PER_BLOCK + size - 1) / THREADS_PER_BLOCK;
     short *input_device;
@@ -909,17 +899,19 @@ void launchPrePorc(short *input_host, Complex_t *base_frame_device, Complex_t *b
 
     cudaCheckError(cudaFree(input_device));
     cudaCheckError(cudaFree(preProcessing_buffer));
-    cudaCheckError(cudaEventRecord(preProcEvt, preProcStream));
+    cudaCheckError(cudaEventRecord(preProcEndEvt, preProcStream));
 }
 
-void launchDistProc(cudaEvent_t &preProcEvt, cudaEvent_t &distEvt, cudaStream_t &distStream,
+void launchDistProc(cudaEvent_t &preProcEndEvt, cudaEvent_t &distStartEvt, cudaEvent_t &distEndEvt, cudaStream_t &distStream,
                     Complex_t *distRes_fft_host_pinned, Complex_t *rx0_device, Complex_t *rx0_fft_input_device,
                     int rx0_extended_size)
 {
     // printf("launch distance processing\n");
 
     // block distStream untill the preprocessing event is happend
-    cudaCheckError(cudaStreamWaitEvent(distStream, preProcEvt));
+    cudaCheckError(cudaStreamWaitEvent(distStream, preProcEndEvt));
+    cudaCheckError(cudaEventRecord(distStartEvt, distStream));
+
     double memSize = 0;
     /**
      * copy memory buffers of DISTANCE PROC asyncrhoniously
@@ -960,10 +952,10 @@ void launchDistProc(cudaEvent_t &preProcEvt, cudaEvent_t &distEvt, cudaStream_t 
     // cudaCheckError(cudaMemcpy(distRes_fft_host_pinned, rx0_fft_input_device, sizeof(Complex_t) * rx0_extended_size, cudaMemcpyDeviceToHost));
     // cudaCheckError(cudaFree(rx0_fft_input_device));
     // printf("dist memSize %.3f KiBytes\n", (double)(memSize / 1024));
-    cudaCheckError(cudaEventRecord(distEvt));
+    cudaCheckError(cudaEventRecord(distEndEvt, distStream));
 }
 
-void launchAngleProc(cudaEvent_t &preProcEvt, cudaEvent_t &distEvt, cudaEvent_t &angleEvt, cudaStream_t &angleStream,
+void launchAngleProc(cudaEvent_t &preProcEvt, cudaEvent_t &distEvt, cudaEvent_t &angleStartEvt, cudaEvent_t &angleEndEvt, cudaStream_t &angleStream,
                      Complex_t *frame_reshaped_device, Complex_t *base_frame_device,
                      Complex_t *distRes_fft_host_pinned, Complex_t *angleRes_host_pinned,
                      Complex_t *rx_fft_input_device, Complex_t *frame_reshaped_device_angle, Complex_t *base_frame_device_angle,
@@ -977,6 +969,7 @@ void launchAngleProc(cudaEvent_t &preProcEvt, cudaEvent_t &distEvt, cudaEvent_t 
     cudaCheckError(cudaStreamWaitEvent(angleStream, preProcEvt));
     // block angle stream untill the dsitance event is occured
     cudaCheckError(cudaStreamWaitEvent(angleStream, distEvt));
+    cudaCheckError(cudaEventRecord(angleStartEvt, angleStream));
 
     /**
      *  copy memory buffers of ANGLE PROCE asyncrhoniously
@@ -1047,10 +1040,10 @@ void launchAngleProc(cudaEvent_t &preProcEvt, cudaEvent_t &distEvt, cudaEvent_t 
     // cudaCheckError(cudaFreeAsync(angle_matrix_device, angleStream));
     // cudaCheckError(cudaFreeAsync(angle_matrix_res_device, angleStream));
 
-    cudaCheckError(cudaEventRecord(angleEvt, angleStream));
+    cudaCheckError(cudaEventRecord(angleEndEvt, angleStream));
 }
 
-void launchSpeedProc(cudaEvent_t &preProcEvt, cudaEvent_t &speedEvt, cudaStream_t &speedStream,
+void launchSpeedProc(cudaEvent_t &preProcEndEvt, cudaEvent_t &speedStartEvt, cudaEvent_t &speedEndEvt, cudaStream_t &speedStream,
                      Complex_t *frame_reshaped_device, Complex_t *base_frame_rx0_device, Complex_t *speedRes_host_pinned,
                      Complex_t *rx0_extended_fftRes_transpose, Complex_t *rx0_extended_fft_input_device,
                      int rx0_extended_size)
@@ -1058,7 +1051,8 @@ void launchSpeedProc(cudaEvent_t &preProcEvt, cudaEvent_t &speedEvt, cudaStream_
     // printf("launch speed processing\n");
 
     long memSize = 0;
-    cudaCheckError(cudaStreamWaitEvent(speedStream, preProcEvt));
+    cudaCheckError(cudaStreamWaitEvent(speedStream, preProcEndEvt));
+    cudaCheckError(cudaEventRecord(speedStartEvt, speedStream));
 
     /**
      *  copy memory buffers of SPEED PROC asyncrhoniously
@@ -1120,10 +1114,11 @@ void launchSpeedProc(cudaEvent_t &preProcEvt, cudaEvent_t &speedEvt, cudaStream_
     // cudaCheckError(cudaFreeAsync(rx0_extended_fft_input_device, speedStream));
     // cudaCheckError(cudaFreeAsync(rx0_extended_fftRes_transpose, speedStream));
 
-    cudaCheckError(cudaEventRecord(speedEvt, speedStream));
+    cudaCheckError(cudaEventRecord(speedEndEvt, speedStream));
 }
 
-void cudaMultiStreamAcceleration(short *input_host, Complex_t *base_frame_device,
+void cudaMultiStreamAcceleration(cudaStream_t &angleStream, cudaStream_t &preProcStream, cudaStream_t &speedStream, cudaStream_t &distStream,
+                                 short *input_host, Complex_t *base_frame_device,
                                  Complex_t *frame_reshaped_device, Complex_t *rx0_fft_input_device_dist,
                                  Complex_t *rx_fft_input_device_angle, Complex_t *frame_reshaped_device_angle,
                                  Complex_t *base_frame_device_angle, Complex_t *angle_weights_device,
@@ -1136,39 +1131,48 @@ void cudaMultiStreamAcceleration(short *input_host, Complex_t *base_frame_device
     /**
      * create streams and event for syncrhonization and conccurent processing
      */
-    cudaStream_t distStream;
+
     cudaStream_t *distStreamPtr = &distStream;
 
-    cudaStream_t angleStream;
     cudaStream_t *angleStreamPtr = &angleStream;
 
-    cudaStream_t speedStream;
     cudaStream_t *speedStreamPtr = &speedStream;
 
-    cudaStream_t preProcStream;
     cudaStream_t *preProcStreamPtr = &preProcStream;
 
-    cudaCheckError(cudaStreamCreate(&distStream));
-    cudaCheckError(cudaStreamCreate(&angleStream));
-    cudaCheckError(cudaStreamCreate(&speedStream));
-    cudaCheckError(cudaStreamCreate(&preProcStream));
+    cudaEvent_t preProcStartEvt;
+    cudaEvent_t preProcEndEvt;
 
-    cudaEvent_t preProcEvt;
-    cudaEvent_t *preProcEvtPtr = &preProcEvt;
+    cudaEvent_t *preProcStartEvtPtr = &preProcStartEvt;
+    cudaEvent_t *preProcEndEvtPtr = &preProcEndEvt;
 
-    cudaEvent_t angleEvt;
-    cudaEvent_t *angleEvtPtr = &angleEvt;
+    cudaEvent_t angleStartEvt;
+    cudaEvent_t angleEndEvt;
 
-    cudaEvent_t distEvt;
-    cudaEvent_t *distEvtPtr = &distEvt;
+    cudaEvent_t *angleStartEvtPtr = &angleStartEvt;
+    cudaEvent_t *angleEndEvtPtr = &angleEndEvt;
 
-    cudaEvent_t speedEvt;
-    cudaEvent_t *speedEvtPtr = &speedEvt;
+    cudaEvent_t distStartEvt;
+    cudaEvent_t distEndEvt;
 
-    cudaCheckError(cudaEventCreateWithFlags(&preProcEvt, cudaEventDisableTiming));
-    cudaCheckError(cudaEventCreateWithFlags(&angleEvt, cudaEventDisableTiming));
-    cudaCheckError(cudaEventCreateWithFlags(&distEvt, cudaEventDisableTiming));
-    cudaCheckError(cudaEventCreateWithFlags(&speedEvt, cudaEventDisableTiming));
+    cudaEvent_t *distStartEvtPtr = &distStartEvt;
+    cudaEvent_t *distEndEvtPtr = &distEndEvt;
+
+    cudaEvent_t speedStartEvt;
+    cudaEvent_t speedEndEvt;
+
+    cudaEvent_t *speedStartEvtPtr = &speedStartEvt;
+    cudaEvent_t *speedEndEvtPtr = &speedEndEvt;
+
+    cudaCheckError(cudaEventCreate(&preProcStartEvt));
+    cudaCheckError(cudaEventCreate(&angleStartEvt));
+    cudaCheckError(cudaEventCreate(&distStartEvt));
+    cudaCheckError(cudaEventCreate(&speedStartEvt));
+
+    cudaCheckError(cudaEventCreate(&preProcEndEvt));
+    cudaCheckError(cudaEventCreate(&angleEndEvt));
+    cudaCheckError(cudaEventCreate(&distEndEvt));
+    cudaCheckError(cudaEventCreate(&speedEndEvt));
 
     Complex_t *rx0_device;
     cudaCheckError(cudaMalloc((void **)&rx0_device, sizeof(Complex_t) * rx0_extended_size));
@@ -1192,29 +1196,25 @@ void cudaMultiStreamAcceleration(short *input_host, Complex_t *base_frame_device
      */
     // launchPrePorc(input_host, base_frame_device, base_frame_rx0_device, rx0_device,
     //               frame_reshaped_device, size, rx0_extended_size, &preProcEvt, &preProcStream);
-    double preProc = timer.elapsed();
     launchPrePorc(input_host, base_frame_device, base_frame_rx0_device, rx0_device,
-                  frame_reshaped_device, size, rx0_extended_size, *preProcEvtPtr, *preProcStreamPtr);
-    preProc = timer.elapsed() - preProc;
+                  frame_reshaped_device, size, rx0_extended_size, *preProcStartEvtPtr, *preProcEndEvtPtr, *preProcStreamPtr);
     // hold the host untill the preprocessing stage is finished
-    cudaCheckError(cudaEventSynchronize(preProcEvt));
+    cudaCheckError(cudaEventSynchronize(preProcEndEvt));
     /**
      * launch distance processing stream
      */
-    double distProc = timer.elapsed();
-    launchDistProc(*preProcEvtPtr, *distEvtPtr, *distStreamPtr, distRes_fft_host_pinned, rx0_device, rx0_fft_input_device_dist, rx0_extended_size);
-    distProc = timer.elapsed() - distProc;
+    launchDistProc(*preProcEndEvtPtr, *distStartEvtPtr, *distEndEvtPtr, *distStreamPtr,
+                   distRes_fft_host_pinned, rx0_device, rx0_fft_input_device_dist, rx0_extended_size);
     /**
      * launch speed processing
      */
-    double speedProc = timer.elapsed();
-    launchSpeedProc(*preProcEvtPtr, *speedEvtPtr, *speedStreamPtr,
+    launchSpeedProc(*preProcEndEvtPtr, *speedStartEvtPtr, *speedEndEvtPtr, *speedStreamPtr,
                     frame_reshaped_device, base_frame_rx0_device, speedRes_host_pinned,
                     rx0_extended_fftRes_transpose, rx0_extended_fft_input_device,
                     rx0_extended_size);
-    speedProc = timer.elapsed();
+
     // only when distance is calculated the angle stream is able to launch
-    cudaCheckError(cudaEventSynchronize(distEvt));
+    cudaCheckError(cudaEventSynchronize(distEndEvt));
     /**
      * distance result host processing
      */
@@ -1227,14 +1227,12 @@ void cudaMultiStreamAcceleration(short *input_host, Complex_t *base_frame_device
     /**
      * launch angle processing only when max distance index is found
      */
-    double angleProc = timer.elapsed();
-    launchAngleProc(*preProcEvtPtr, *distEvtPtr, *angleEvtPtr, *angleStreamPtr,
+    launchAngleProc(*preProcEndEvtPtr, *distEndEvtPtr, *angleStartEvtPtr, *angleEndEvtPtr, *angleStreamPtr,
                     frame_reshaped_device, base_frame_device,
                     distRes_fft_host_pinned, angleRes_host_pinned,
                     rx_fft_input_device_angle, frame_reshaped_device_angle, base_frame_device_angle,
                     angle_weights_device, rx0_fft_input_device_angle, angle_matrix_device, angle_matrix_res_device,
                     rx0_extended_size, maxDistIdx);
-    angleProc = timer.elapsed() - angleProc;
     /**
      * result host processing
      */
@@ -1248,19 +1246,28 @@ void cudaMultiStreamAcceleration(short *input_host, Complex_t *base_frame_device
     cudaCheckError(cudaStreamSynchronize(angleStream));
     int maxAngleIdx = findAbsMax(angleRes_host_pinned, angle_sample_num);
     double maxAngle = (maxAngleIdx - 900.0) / 10.0;
+    cudaCheckError(cudaDeviceSynchronize());
+
     double duration = timer.elapsed() - start;
-    double fps = 1 / duration;
+    double fps = multiStreamCnt / duration;
 
     multiStreamCnt++;
 
     if (multiStreamCnt == 89)
     {
-        printf("distance %.3f m angle %.3f degree speed %.3f m/s\n", distance, maxAngle, maxSpeed);
-        printf("total time %.3f ms fps %.3f \n", (1000 * duration), fps);
-        printf("preProcessing time %.3f ms fps %.3f \n", (1000 * preProc), 1 / preProc);
-        printf("distance time %.3f ms, fps %.3f\n", (1000 * distProc), 1 / distProc);
-        printf("angle time %.3f ms, fps %.3f\n", (1000 * angleProc), 1 / angleProc);
-        printf("speed time %.3f ms, fps %.3f\n", (1000 * speedProc), 1 / speedProc);
+        float preProc, distProc, angleProc, speedProc;
+
+        cudaCheckError(cudaEventElapsedTime(&preProc, preProcStartEvt, preProcEndEvt));
+        cudaCheckError(cudaEventElapsedTime(&distProc, distStartEvt, distEndEvt));
+        cudaCheckError(cudaEventElapsedTime(&angleProc, angleStartEvt, angleEndEvt));
+        cudaCheckError(cudaEventElapsedTime(&speedProc, speedStartEvt, speedEndEvt));
+
+        // printf("distance %.3f m angle %.3f degree speed %.3f m/s\n", distance, maxAngle, maxSpeed);
+        printf("inner Timmer:\ntotal time %.3f ms fps %.3f \n", (1000 * duration) * multiStreamCnt, fps / multiStreamCnt);
+        printf("preProcessing time %.3f ms fps %.3f \n", (1000 * preProc), multiStreamCnt / preProc);
+        printf("distance time %.3f ms, fps %.3f\n", (1000 * distProc), multiStreamCnt / distProc);
+        printf("angle time %.3f ms, fps %.3f\n", (1000 * angleProc), multiStreamCnt / angleProc);
+        printf("speed time %.3f ms, fps %.3f\n", (1000 * speedProc), multiStreamCnt / speedProc);
         printf("multiStreamCnt %d\n", multiStreamCnt);
     }
     cudaDeviceSynchronize();
@@ -1273,8 +1280,16 @@ void cudaMultiStreamAcceleration(short *input_host, Complex_t *base_frame_device
 
     cudaCheckError(cudaFree(rx0_device));
     cudaCheckError(cudaFree(base_frame_rx0_device));
-    cudaCheckError(cudaEventDestroy(preProcEvt));
-    cudaCheckError(cudaEventDestroy(distEvt));
-    cudaCheckError(cudaEventDestroy(angleEvt));
-    cudaCheckError(cudaEventDestroy(speedEvt));
+
+    cudaCheckError(cudaEventDestroy(preProcStartEvt));
+    cudaCheckError(cudaEventDestroy(preProcEndEvt));
+
+    cudaCheckError(cudaEventDestroy(distStartEvt));
+    cudaCheckError(cudaEventDestroy(distEndEvt));
+
+    cudaCheckError(cudaEventDestroy(angleStartEvt));
+    cudaCheckError(cudaEventDestroy(angleEndEvt));
+
+    cudaCheckError(cudaEventDestroy(speedStartEvt));
+    cudaCheckError(cudaEventDestroy(speedEndEvt));
 }
