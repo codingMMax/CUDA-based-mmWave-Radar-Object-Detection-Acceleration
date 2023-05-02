@@ -67,6 +67,18 @@ struct Complex_t
     double real, imag;
 };
 
+static inline int nextPow2(int n)
+{
+    n--;
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    n++;
+    return n;
+}
+
 void preProcessing_host(short *OriginalArray, Complex_t *Reshape, int size);
 void printComplexCUDA(Complex_t *input, int start, int end, int size);
 void printShortCUDA(short *input, int start, int end, int size);
@@ -216,16 +228,25 @@ void launchPrePorc(short *input_host, Complex_t *base_frame_device, Complex_t *b
                    int rx0_extended_size, cudaEvent_t *preProcEvt, cudaStream_t *preProcStream);
 
 void launchDistProc(cudaEvent_t &preProcEvt, cudaEvent_t &distEvt, cudaStream_t &distStream,
-                    Complex_t *distRes_fft_host_pinned, Complex_t *rx0_device, int rx0_extended_size);
+                    Complex_t *distRes_fft_host_pinned, Complex_t *rx0_device, Complex_t *rx0_fft_input_device,
+                    int rx0_extended_size);
 
 void launchAngleProc(cudaEvent_t &preProcEvt, cudaEvent_t &distEvt, cudaEvent_t &angleEvt, cudaStream_t &angleStream,
                      Complex_t *frame_reshaped_device, Complex_t *base_frame_device,
                      Complex_t *distRes_fft_host_pinned, Complex_t *angleRes_host_pinned,
+                     Complex_t *rx_fft_input_device, Complex_t *frame_reshaped_device_angle, Complex_t *base_frame_device_angle,
+                     Complex_t *angle_weights_device, Complex_t *rx0_fft_input_device, Complex_t *angle_matrix_device, Complex_t *angle_matrix_res_device,
                      int rx0_extended_size, int maxIdx);
 
-void launchSpeedProc(cudaEvent_t &preProcEvt, cudaEvent_t &speedEvt, cudaStream_t &speedStream, Complex_t *frame_reshaped_device,
-                     Complex_t *base_frame_rx0_device, Complex_t *speedRes_host_pinned, int rx0_extended_size);
+void launchSpeedProc(cudaEvent_t &preProcEvt, cudaEvent_t &speedEvt, cudaStream_t &speedStream,
+                     Complex_t *frame_reshaped_device, Complex_t *base_frame_rx0_device, Complex_t *speedRes_host_pinned,
+                     Complex_t *rx0_extended_fftRes_transpose, Complex_t *rx0_extended_fft_input_device,
+                     int rx0_extended_size);
 
 void cudaMultiStreamAcceleration(short *input_host, Complex_t *base_frame_device,
-                                 Complex_t *frame_reshaped_device, int size,
-                                 int rx0_extended_size);
+                                 Complex_t *frame_reshaped_device, Complex_t *rx0_fft_input_device_dist,
+                                 Complex_t *rx_fft_input_device_angle, Complex_t *frame_reshaped_device_angle,
+                                 Complex_t *base_frame_device_angle, Complex_t *angle_weights_device,
+                                 Complex_t *rx0_fft_input_device_angle, Complex_t *angle_matrix_device, Complex_t *angle_matrix_res_device,
+                                 Complex_t *rx0_extended_fftRes_transpose, Complex_t *rx0_extended_fft_input_device,
+                                 int size, int rx0_extended_size);
