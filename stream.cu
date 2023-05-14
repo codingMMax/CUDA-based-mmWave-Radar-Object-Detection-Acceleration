@@ -1269,8 +1269,9 @@ void cudaMultiStreamAcceleration(cudaStream_t &angleStream, cudaStream_t &prePro
         cudaCheckError(cudaEventElapsedTime(&speedProc, speedStartEvt, speedEndEvt));
 
         // printf("distance %.3f m angle %.3f degree speed %.3f m/s\n", distance, maxAngle, maxSpeed);
-        printf("inner Timmer:\ntotal time in CPU%.3f ms fps %.3f \n", (1000 * duration) * multiStreamCnt, fps / multiStreamCnt);
-        printf("total time in CUDA time %.3f ms fps %.3f \n", (multiStreamCnt * totalProc), 1000 / totalProc);
+        printf("inner Timmer:\ntotal time in CPU %.3f ms fps %.3f \n", (1000 * duration) * multiStreamCnt, fps / multiStreamCnt);
+
+        printf("CUDA Timer:\ntotal time %.3f ms fps %.3f \n", (multiStreamCnt * totalProc), 1000 / totalProc);
         printf("total preProcessing time %.3f ms fps %.3f \n", (multiStreamCnt * preProc), 1000 / preProc);
         printf("total distance time %.3f ms, fps %.3f\n", (multiStreamCnt * distProc), 1000 / distProc);
         printf("total angle time %.3f ms, fps %.3f\n", (multiStreamCnt * angleProc), 1000 / angleProc);
