@@ -217,7 +217,7 @@ __global__ void bitReverseSwapChunk_kernel(Complex_t *srcData, int size, int chu
  * @param: Input: size: int type indicates the total length of 'input_host'.
  * @param: Input: rx0_extended_size: int type indicates the length of 'rx0_extended_size'.
  */
-void cudaAcceleration(double &speed, double &angle, double &distance,
+void cudaAcceleration(bool& singleStream, double &speed, double &angle, double &distance,
                       double &speedTime, double &angleTime, double &distTime,
                       double &fftTime, double &preProcessingTime, double &findMaxTime, double &totalTime,
                       short *input_host, Complex_t *base_frame_device, Complex_t *frame_reshaped_device,

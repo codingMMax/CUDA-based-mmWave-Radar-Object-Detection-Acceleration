@@ -107,17 +107,18 @@ int main(int argc, char *argv[])
         double multiStreamTime = timer.elapsed();
         while ((size = (int)fread(read_data, sizeof(short), data_per_frame, fp)) > 0)
         {
-
-            // cudaAcceleration(singleStream, speed, angle, distance, speedTime, angleTime, distTime,
-            //                  fftTime, preProcessingTime, findMaxTime, totalTime,
-            //                  read_data, base_frame_device, frame_reshaped_device,
-            //                  size, rx0_extended_size);
-
-            cudaMultiStreamAcceleration(angleStream, preProcStream, speedStream, distStream, read_data, base_frame_device, frame_reshaped_device, rx0_fft_input_device_dist,
-                                        rx_fft_input_device_angle, frame_reshaped_device_angle, base_frame_device_angle,
-                                        angle_weights_device, rx0_fft_input_device_angle, angle_matrix_device,
-                                        angle_matrix_res_device, rx0_extended_fftRes_transpose, rx0_extended_fft_input_device,
-                                        size, rx0_extended_size);
+            frameCnt++;
+            printf("Frame[%d]\n",frameCnt);
+            cudaAcceleration(singleStream, speed, angle, distance, speedTime, angleTime, distTime,
+                             fftTime, preProcessingTime, findMaxTime, totalTime,
+                             read_data, base_frame_device, frame_reshaped_device,
+                             size, rx0_extended_size);
+            printf("\n\n");
+            // cudaMultiStreamAcceleration(angleStream, preProcStream, speedStream, distStream, read_data, base_frame_device, frame_reshaped_device, rx0_fft_input_device_dist,
+            //                             rx_fft_input_device_angle, frame_reshaped_device_angle, base_frame_device_angle,
+            //                             angle_weights_device, rx0_fft_input_device_angle, angle_matrix_device,
+            //                             angle_matrix_res_device, rx0_extended_fftRes_transpose, rx0_extended_fft_input_device,
+            //                             size, rx0_extended_size);
 
             // cudaDist[frameCnt] = distance;
             // cudaAngle[frameCnt] = angle;
@@ -127,7 +128,6 @@ int main(int argc, char *argv[])
             // printf("cudaAngle[%d] %.6f degree\n", frameCnt, cudaAngle[frameCnt]);
             // printf("cudaSpeed[%d] %.6f m/s\n", frameCnt, cudaSpeed[frameCnt]);
             cudaCheckError(cudaDeviceSynchronize());
-            frameCnt++;
         }
         multiStreamTime = timer.elapsed() - multiStreamTime;
         if (singleStream)

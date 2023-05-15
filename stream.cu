@@ -586,13 +586,14 @@ __global__ void bitReverseSwapChunk_kernel(Complex_t *srcData, int size, int chu
  * @param rx0_extended_size: int type indicates the length of 'rx0_extended_size'.
  *
  */
-void cudaAcceleration(double &speed, double &angle, double &distance, double &speedTime,
+void cudaAcceleration(bool &singleStream, double &speed, double &angle, double &distance, double &speedTime,
                       double &angleTime, double &distTime, double &fftTime, double &preProcessingTime,
                       double &findMaxTime, double &totalTime, short *input_host,
                       Complex_t *base_frame_device, Complex_t *frame_reshaped_device,
                       int size, int rx0_extended_size)
 {
 
+    singleStream = true;
     /**
      * Pre-processing
      */
@@ -637,12 +638,15 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
         pow++;
     }
     cudaDeviceSynchronize();
+    double distanceFFT = timer.elapsed();
     bitReverseSwap_kernel<<<num_blocks_preProcessing, THREADS_PER_BLOCK>>>(rx0_fft_input_device, rx0_extended_size, pow);
     for (int i = 0; i < pow; i++)
     {
         butterflyFFT_kernel<<<num_blocks_preProcessing, THREADS_PER_BLOCK>>>(rx0_fft_input_device, rx0_extended_size, i + 1, pow);
     }
     cudaDeviceSynchronize();
+    distanceFFT = timer.elapsed() - distanceFFT;
+    printf("distance FFT %.3f ms \n", distanceFFT * 1000);
 
     double fftEnd = timer.elapsed();
     double findMaxStart = fftEnd;
@@ -678,6 +682,7 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     cudaCheckError(cudaMalloc((void **)&rx_fft_input_device, sizeof(Complex_t) * rx0_extended_size * (RxSize - 1)));
     int num_blocks_angle = (rx0_extended_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
+    double angleFFT = 0;
     for (int i = 0; i < RxSize - 1; i++)
     {
         double anglePreProc = timer.elapsed();
@@ -700,13 +705,16 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
         }
 
         fftTime += (timer.elapsed() - angleFFTBegin);
+        angleFFT += timer.elapsed() - angleFFTBegin;
     }
     cudaDeviceSynchronize();
-
+    printf("angle FFT time %.3f ms\n", angleFFT * 1000);
     // above operations are verified
     // assign values to angle weigths
     Complex_t *angle_weights_device;
     cudaCheckError(cudaMalloc((void **)&angle_weights_device, sizeof(Complex_t) * RxSize));
+
+    double angleWeightMMM = timer.elapsed();
     angleWeightInit_kernel<<<1, RxSize>>>(angle_weights_device, rx0_fft_input_device, rx_fft_input_device, maxAngleIdx, rx0_extended_size);
 
     // Stage4 MMM: Angle Matrix X angle_weights
@@ -724,8 +732,12 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     Complex_t *angle_matrix_res_host;
     cudaCheckError(cudaMalloc((void **)&angle_matrix_res_device, sizeof(Complex_t) * angle_sample_num));
     angle_matrix_res_host = (Complex_t *)malloc(sizeof(Complex_t) * angle_sample_num);
+
     angleMatrixMul_kernel<<<num_blocks_angle, THREADS_PER_BLOCK>>>(angle_matrix_device, angle_weights_device, angle_matrix_res_device, angle_sample_num);
     cudaDeviceSynchronize();
+
+    angleWeightMMM = timer.elapsed() - angleWeightMMM;
+    printf("Angle Weight MMM time %.3f ms\n", angleWeightMMM * 1000);
 
     double angleFindMax = timer.elapsed();
     cudaCheckError(cudaMemcpy(angle_matrix_res_host, angle_matrix_res_device, sizeof(Complex_t) * angle_sample_num, cudaMemcpyDeviceToHost));
@@ -769,6 +781,7 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     }
     // stage2 apply fft for each padded chirp of rx0
     double speedFFTBegin = timer.elapsed();
+    double speedComputeBegin = timer.elapsed();
 
     num_blocks_speed = (extended_sample_size * ChirpSize + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     bitReverseSwapChunk_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fft_input_device, extended_sample_size * ChirpSize, extended_sample_size, pow);
@@ -782,10 +795,8 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
 
     // above chunk vitreverseSwap is verified
 
-    double speedMarker = timer.elapsed() - speedFFTBegin;
-
     fftTime += (timer.elapsed() - speedFFTBegin);
-
+    double speedFFT = (timer.elapsed() - speedFFTBegin);
     // above FFT is verified
     // stage3 transpose the fft res
     Complex_t *rx0_extended_fftRes_transpose;
@@ -821,9 +832,12 @@ void cudaAcceleration(double &speed, double &angle, double &distance, double &sp
     fftResSwapChunk_kernel<<<num_blocks_speed, THREADS_PER_BLOCK>>>(rx0_extended_fftRes_transpose, rx0_extended_size, ChirpSize);
     cudaDeviceSynchronize();
 
-    speedMarker = timer.elapsed() - speedFFTBegin;
 
     fftTime += (timer.elapsed() - speedFFTBegin);
+    speedFFT += (timer.elapsed() - speedFFTBegin);
+
+    printf("speed fft time %.3f ms\n",1000*speedFFT);
+
 
     Complex_t *speed_fft_res_host = (Complex_t *)malloc(sizeof(Complex_t) * rx0_extended_size);
 
