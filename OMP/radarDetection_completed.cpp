@@ -101,6 +101,14 @@ double Complex_mol(Complex *a){
     return sqrt(a->real*a->real+a->imag*a->imag);
 }
 
+void printComplex(Complex *Data, int size, char *string){
+    printf("%s Print!\n", string);
+    for (int i = 0; i < size; i++){
+      printf("data %d = %lf+i*%lf\n", i, (Data+i)->real,  (Data+i)->imag);
+    }
+}
+
+
 void Matrix_Transpose(Complex *M, Complex *M_res, int sizeRow, int sizeCol){
     for (int i = 0; i < sizeRow; i++){
         for (int j =0; j < sizeCol; j++){
@@ -145,8 +153,13 @@ void FFT_nonrecursive(Complex x[], int len){
     int *r = (int *)malloc(sizeof(int)*len);
     Complex t;
     //FFT index reverse，get the new index，l=log2(len)
-    while (temp < len) temp <<= 1, l++;
+    //while (temp < len) temp <<= 1, l++;
+    temp = 16384, l = 14;
+    for (int i = 0; i < 10; i++) 
+    // printf("index reverse r[%d]=%d \n", i, r[i]);
     for (int i = 0; i < len; i++) r[i] = (r[i >> 1] >> 1) | ((i & 1) << (l - 1));
+    for (int i = 0; i < 10; i++) 
+    // printf("index reverse r[%d]=%d \n", i, r[i]);
     //swap according to the index
     for (int i = 0; i < len; i++)
         if (i < r[i]) {
@@ -154,6 +167,7 @@ void FFT_nonrecursive(Complex x[], int len){
             x[i] = x[r[i]];
             x[r[i]] = t;
         }
+    // printComplex(x, 10, "index swap");
     for (int mid = 1; mid < len; mid <<= 1){
         Complex Wn = GetComplex(cos(pi / mid), -sin(pi / mid)); /*drop the "-" sin，then divided by len to get the IFFT*/
         for (int R = mid << 1, j = 0; j < len; j += R){
@@ -165,6 +179,7 @@ void FFT_nonrecursive(Complex x[], int len){
             }
         }
     }
+    // printComplex(x, 10, "fft result");
     free(r);
 }
 
@@ -178,6 +193,7 @@ void FFT_nonrecursive_OMP(Complex x[], int len){
     //FFT index reverse，get the new index，l=log2(len)
     // #pragma omp parallel
     while (temp < len) temp <<= 1, l++;
+    // printf("l = %d\n",l);
     // #pragma omp parallel
     for (int i = 0; i < len; i++) r[i] = (r[i >> 1] >> 1) | ((i & 1) << (l - 1));
     //swap according to the index
@@ -194,7 +210,7 @@ void FFT_nonrecursive_OMP(Complex x[], int len){
     int imax = (int)(log(len)/log(2));
     int R;
     // int mido;
-    // printf("imax = %d\n",imax);
+    // printf("\nimax = %d\n",imax);
     //**********************************************Pragma***********************************************//
     // #pragma omp parallel // 
     //   {
@@ -267,7 +283,7 @@ void FFTextend(Complex *Data, Complex *Res,  int size){
     FFT_nonrecursive(Data_extend, powres);
     // FFT_recursive(Data_extend, powres);
 
-    memmove(Data, Data_extend, size *sizeof(Complex));
+    // memmove(Data, Data_extend, size *sizeof(Complex));
     memmove(Res, Data_extend, powres *sizeof(Complex));
     free(Data_extend);
 }
@@ -681,12 +697,6 @@ int FindAbsMax(Complex *ptr, int size){
 }
 
 
-void printComplex(Complex *Data, int size){
-    printf("Print!\n");
-    for (int i = 0; i < size; i++){
-      printf("data %d = %lf+i*%lf\n", i, (Data+i)->real,  (Data+i)->imag);
-    }
-}
 
 void writeComplex(Complex *Data, int size){
     FILE *outfile;
@@ -728,30 +738,30 @@ void printAbs(Complex *Data, int size){
     }
 }
 
-void testMatrixTranspose(){
-    Complex *Data = (Complex *)malloc( 12* sizeof(Complex));
-    Complex *Data_tp = (Complex *)malloc( 12* sizeof(Complex));
-    for (int i = 0; i < 12; i++){
-        *(Data+i)=GetComplex(i, i);
-    }
-    printComplex(Data, 12);
-    Matrix_Transpose(Data, Data_tp, 3, 4 );
-    printComplex(Data_tp, 12);
-    free(Data);
-}
+// void testMatrixTranspose(){
+//     Complex *Data = (Complex *)malloc( 12* sizeof(Complex));
+//     Complex *Data_tp = (Complex *)malloc( 12* sizeof(Complex));
+//     for (int i = 0; i < 12; i++){
+//         *(Data+i)=GetComplex(i, i);
+//     }
+//     printComplex(Data, 12);
+//     Matrix_Transpose(Data, Data_tp, 3, 4 );
+//     printComplex(Data_tp, 12);
+//     free(Data);
+// }
 
-void testFFTshift(){
-    int size = 11;
-    Complex *Data = (Complex *)malloc( size* sizeof(Complex));
+// void testFFTshift(){
+//     int size = 11;
+//     Complex *Data = (Complex *)malloc( size* sizeof(Complex));
 
-    for (int i = 0; i < size; i++){
-        *(Data+i)=GetComplex(i, i);
-    }
-    printComplex(Data, size);
-    FFTshift(Data, size);
-    printComplex(Data, size);
-    free(Data);
-}
+//     for (int i = 0; i < size; i++){
+//         *(Data+i)=GetComplex(i, i);
+//     }
+//     printComplex(Data, size);
+//     FFTshift(Data, size);
+//     printComplex(Data, size);
+//     free(Data);
+// }
 
 // Detect the distance , 
 // Input : the bin size file 
@@ -777,6 +787,10 @@ int Kernel_radarDectection(char *filepath, double *Dis, double *Agl, double *Spd
     Complex *Data_Frm0_reshape = (Complex *)malloc( size * sizeof(Complex));
     ReshapeComplex(Data_Frm0, Data_Frm0_reshape, readsize);
     // printComplex(Data_Frm0_reshape, 100);
+        // printf("data_frm0_read\n");
+    // for (int i = 0; i < 10; i++){
+    //   printf("data_frm0_read %d = %d\n", i, (int)Data_Frm0[i]);
+    // }
 
     // malloc for the data
     short *Data_Frm = (short*)malloc(readsize * sizeof(short));
@@ -826,8 +840,9 @@ int Kernel_radarDectection(char *filepath, double *Dis, double *Agl, double *Spd
     frm = 0;
     // for (frm = testfrm; frm < testfrm+60; frm++ ){
     while(1){
+        if(frm == 89)break;
         frm++;
-        // if(frm ==30 )break;
+        
         
         start= clock();
         readstart = clock();
@@ -879,11 +894,13 @@ int Kernel_radarDectection(char *filepath, double *Dis, double *Agl, double *Spd
             // do the 1dfft for the data in rx0
             Complex *chp_ptr = Data_Frm_rx + chp * SampleSize;
             Complex *fft1dres_ptr = (Data_2dfft + chp * SampleSize_extend);
+            //if(chp == 102)printComplex(chp_ptr, 128, "in");
             // do fft for the data in Data_frm_rx0, the result is stored in Data_2dfft
             // a new version of FFTextend_OMP but divide N here:
             FFTextend_OMP(chp_ptr, fft1dres_ptr, SampleSize);
+            //if(chp == 102)printComplex(fft1dres_ptr, 128, "fft row");
         }
-
+        // printComplex(Data_2dfft+100*ChirpSize_extend, 128, "row");
         // 2dfft: do the fft again for each column for the 1dfft result
         // ||||
         // ||||
@@ -891,41 +908,43 @@ int Kernel_radarDectection(char *filepath, double *Dis, double *Agl, double *Spd
         int chp_mid = ChirpSize_extend/2 ;
         int smp_mid = SampleSize_extend/2;
         // transpose the matrix
-        Matrix_Transpose(Data_2dfft, Data_2dfft_tp, ChirpSize, SampleSize);
+        Matrix_Transpose(Data_2dfft, Data_2dfft_tp, ChirpSize_extend, SampleSize_extend);
+        // printComplex(Data_2dfft_tp, 128, "tp0");
+        // printComplex(Data_2dfft_tp + ChirpSize_extend, 10, "tp1");
         for(int smp = 0; smp < SampleSize_extend; smp++){
             // do the 1dfft for the data in rx0
             Complex *smp_ptr = Data_2dfft_tp + smp * ChirpSize_extend;
     
-            FFTextend_OMP(smp_ptr, smp_ptr, SampleSize_extend);
+            FFTextend_OMP(smp_ptr, smp_ptr, ChirpSize_extend);
+            // fft shift, exchange the data before mid and after mid
+            // FFTshift(smp_ptr, ChirpSize_extend);
+            // // set the mid to 0
+            // *(smp_ptr + chp_mid) = GetComplex(0, 0);
+        }
+        // printComplex(Data_2dfft_tp, 10, "col");
+        for(int smp = 0; smp < SampleSize_extend; smp++){
+            // do the 1dfft for the data in rx0
+            Complex *smp_ptr = Data_2dfft_tp + smp * ChirpSize_extend;
+    
+            // FFTextend_OMP(smp_ptr, smp_ptr, SampleSize_extend);
             // fft shift, exchange the data before mid and after mid
             FFTshift(smp_ptr, ChirpSize_extend);
             // set the mid to 0
             *(smp_ptr + chp_mid) = GetComplex(0, 0);
         }
+        // printComplex(Data_2dfft_tp, 10, "shift");
+         
 
-         //--------------- find Max -----------------
-        // int max2dfft =FindAbsMax(Data_2dfft, ChirpSize * SampleSize);
-        // // TODO: make sure the sequence of this is totally correct\
-        // // col
-        // int maxSDisidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) % ChirpSize;
-        // // row
-        // int maxSpdidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) / ChirpSize;
-        // // int maxSpdidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) % ChirpSize;
-        // // int maxSDisidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) / ChirpSize;
-        // double maxSpd = ((maxSpdidx)*fr/ChirpSize - fr/2)*lamda/2;
-        // double maxSDis = ((maxSDisidx)*Fs/SampleSize )*cspd/(2*mu)*100/128;
-        // // the whole formula  maxDis = c*(((double)maxDisidx*Fs/(ChirpSize*SampleSize)))/(2*mu);
-
-        int max2dfft =FindAbsMax(Data_2dfft_tp, 0.4* ChirpSize * SampleSize);
+        int max2dfft =FindAbsMax(Data_2dfft_tp, ChirpSize * SampleSize);
         // TODO: make sure the sequence of this is totally correct\
         // col
-        int maxSDisidx = FindAbsMax(Data_2dfft_tp, 0.4* ChirpSize * SampleSize) / ChirpSize;
+        int maxSDisidx = FindAbsMax(Data_2dfft_tp, ChirpSize * SampleSize) / ChirpSize;
         // row
         int maxSpdidx = FindAbsMax(Data_2dfft_tp, ChirpSize * SampleSize) % ChirpSize;
         // int maxSpdidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) % ChirpSize;
         // int maxSDisidx = FindAbsMax(Data_2dfft, ChirpSize * SampleSize) / ChirpSize;
         double maxSpd = ((maxSpdidx)*fr/ChirpSize - fr/2)*lamda/2;
-        double maxSDis = ((maxSDisidx)*Fs/SampleSize )*cspd/(2*mu);
+        double maxSDis = ((maxSDisidx)*Fs/SampleSize_extend )*cspd/(2*mu);
         // the whole formula  maxDis = c*(((double)maxDisidx*Fs/(ChirpSize*SampleSize)))/(2*mu);
         *(Spd + frm) = maxSpd ;
 
@@ -978,9 +997,10 @@ int Kernel_radarDectection(char *filepath, double *Dis, double *Agl, double *Spd
 
         // print: result
         printf("frm=%d,  ",  frm);
-        printf("maxDisidx=%d,  maxDis=%lf,  ",  maxDisidx, maxDis);
-        printf("maxAglidx=%d,  maxAgl=%lf,  ",  maxAglidx, maxAgl);
+        printf("maxDisidx=%d,  maxDis=%lf, ",  maxDisidx, maxDis);
+        printf("maxAglidx=%d,  maxAgl=%lf, ",  maxAglidx, maxAgl);
         printf("maxSpdidx=%d,  maxSpd=%lf, maxSpdDisIdx=%d, maxSpdDis=%lf\n ",maxSpdidx, maxSpd, maxSDisidx, maxSDis);
+        
         // printf("max2dfft=%d, maxSpdidx=%d,  maxSpd=%lf, maxSpdDisIdx=%d, maxSpdDis=%lf\n ", max2dfft, maxSpdidx, maxSpd, maxSDisidx, maxSDis);
         // print: time
         // printf("latency=%fs,  throughput=%ffrm/s, ",difftime(end,start)/CLOCKS_PER_SEC*1000, 1/(difftime(end,start)/CLOCKS_PER_SEC));  
@@ -988,8 +1008,19 @@ int Kernel_radarDectection(char *filepath, double *Dis, double *Agl, double *Spd
         // difftime(readend,readstart)/CLOCKS_PER_SEC*1000,  difftime(rpend,rpstart)/CLOCKS_PER_SEC*1000,  
         // difftime(Disend, Disstart)/CLOCKS_PER_SEC*1000 ,  difftime(Aglend,Aglstart)/CLOCKS_PER_SEC*1000,
         // difftime(Spdend,Spdstart)/CLOCKS_PER_SEC*1000 ); 
+        
     }
+    // printf("data_frm_read\n");
+    // for (int i = 0; i < 10; i++){
+    //   printf("data_frm_read %d = %d\n", i, (int)Data_Frm[i]);
+    // }
     
+    // printComplex(Data_Frm_reshape, 10, "data_frm_reshape");
+    // printComplex(Data_Frm_rx, 10, "data_frm_rx");
+    // printComplex(Data_fft, 10, "data_fft");
+
+
+
     fclose(infile);
     free(Data_Frm);
     free(Data_Frm_reshape);
